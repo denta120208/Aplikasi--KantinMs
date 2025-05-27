@@ -74,6 +74,8 @@ const Login = () => {
             <Text style={styles.loginButtonText}>Login</Text>
           )}
         </TouchableOpacity>
+        <Text style={styles.subtitle}>Usn:User@gmail.com</Text>
+         <Text style={styles.subtitle}>Pw:123456</Text>
       </View>
     </View>
   );

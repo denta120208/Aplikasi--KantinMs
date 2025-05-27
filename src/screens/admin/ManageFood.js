@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput, Alert, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { Picker } from '@react-native-picker/picker';
 import * as ImagePicker from 'expo-image-picker';
 import { db } from '../../config/firebaseConfig';
-import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc } from 'firebase/firestore';
+import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc, query, where } from 'firebase/firestore';
 
 const ManageFood = () => {
   const [foods, setFoods] = useState([]);
@@ -11,35 +12,44 @@ const ManageFood = () => {
   const [price, setPrice] = useState('');
   const [description, setDescription] = useState('');
   const [image, setImage] = useState(null);
+  const [selectedCanteen, setSelectedCanteen] = useState('A');
   const [isEditing, setIsEditing] = useState(false);
   const [editId, setEditId] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
 
+  const canteens = [
+    { label: 'Kantin A', value: 'A' },
+    { label: 'Kantin B', value: 'B' },
+    { label: 'Kantin C', value: 'C' },
+    { label: 'Kantin D', value: 'D' }
+  ];
+
   useEffect(() => {
-    console.log("Component mounted, fetching foods");
+    console.log("Component mounted, fetching foods for canteen:", selectedCanteen);
     fetchFoods();
-  }, []);
+  }, [selectedCanteen]);
 
   const fetchFoods = async () => {
-    console.log("Starting to fetch foods");
+    console.log("Starting to fetch foods for canteen:", selectedCanteen);
     setIsLoading(true);
     try {
       const foodsCollection = collection(db, 'foods');
-      console.log("Collection reference created");
-      const foodsSnapshot = await getDocs(foodsCollection);
-      console.log(`Fetched ${foodsSnapshot.size} foods`);
+      const q = query(foodsCollection, where('canteen', '==', selectedCanteen));
+      console.log("Query created for canteen:", selectedCanteen);
+      const foodsSnapshot = await getDocs(q);
+      console.log(`Fetched ${foodsSnapshot.size} foods for canteen ${selectedCanteen}`);
       const foodsList = foodsSnapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       }));
-      console.log("Processed foods data");
+      console.log("Processed foods data for canteen:", selectedCanteen);
       setFoods(foodsList);
     } catch (error) {
       console.error('Error fetching foods:', error);
       Alert.alert('Error', 'Gagal mengambil data makanan: ' + error.message);
     } finally {
       setIsLoading(false);
-      console.log("Fetch completed");
+      console.log("Fetch completed for canteen:", selectedCanteen);
     }
   };
 
@@ -110,18 +120,20 @@ const ManageFood = () => {
           name,
           price: Number(price),
           description,
-          imageData
+          imageData,
+          canteen: selectedCanteen
         });
-        Alert.alert('Sukses', 'Makanan berhasil diupdate');
+        Alert.alert('Sukses', `Makanan berhasil diupdate untuk Kantin ${selectedCanteen}`);
       } else {
         await addDoc(collection(db, 'foods'), {
           name,
           price: Number(price),
           description,
           imageData,
+          canteen: selectedCanteen,
           createdAt: new Date()
         });
-        Alert.alert('Sukses', 'Makanan berhasil ditambahkan');
+        Alert.alert('Sukses', `Makanan berhasil ditambahkan ke Kantin ${selectedCanteen}`);
       }
 
       setName('');
@@ -144,33 +156,28 @@ const ManageFood = () => {
     setPrice(food.price.toString());
     setDescription(food.description);
     setImage(food.imageData);
+    setSelectedCanteen(food.canteen);
     setIsEditing(true);
     setEditId(food.id);
   };
 
-  // Simplified and direct deletion function
   const deleteFood = async (id) => {
     console.log("Starting delete operation for food:", id);
     try {
       setIsLoading(true);
       
-      // Get a reference to the document
       const foodRef = doc(db, 'foods', id);
       console.log("Document reference created");
       
-      // Delete the document
       console.log("Attempting to delete document");
       await deleteDoc(foodRef);
       console.log("Document deleted successfully");
       
-      // Show success message
       Alert.alert('Sukses', 'Makanan berhasil dihapus');
       
-      // Update state to remove the deleted food item
       setFoods(prevFoods => prevFoods.filter(food => food.id !== id));
       console.log("State updated");
       
-      // If currently editing this food, reset the form
       if (isEditing && editId === id) {
         setName('');
         setPrice('');
@@ -189,7 +196,6 @@ const ManageFood = () => {
     }
   };
 
-  // Direct confirmation without using a separate function
   const handleDeletePress = (id) => {
     console.log("Delete button pressed for food:", id);
     Alert.alert(
@@ -214,11 +220,49 @@ const ManageFood = () => {
     );
   };
 
+  const resetForm = () => {
+    setName('');
+    setPrice('');
+    setDescription('');
+    setImage(null);
+    setIsEditing(false);
+    setEditId(null);
+  };
+
   return (
     <ScrollView style={styles.container}>
       <Text style={styles.header}>Kelola Menu Makanan</Text>
       
+      {/* Canteen Selection */}
+      <View style={styles.canteenContainer}>
+        <Text style={styles.canteenLabel}>Pilih Kantin:</Text>
+        <View style={styles.canteenPicker}>
+          <Picker
+            selectedValue={selectedCanteen}
+            onValueChange={(itemValue) => {
+              setSelectedCanteen(itemValue);
+              if (isEditing) {
+                resetForm(); // Reset form when switching canteen during edit
+              }
+            }}
+            style={styles.picker}
+          >
+            {canteens.map((canteen) => (
+              <Picker.Item 
+                key={canteen.value} 
+                label={canteen.label} 
+                value={canteen.value} 
+              />
+            ))}
+          </Picker>
+        </View>
+      </View>
+      
       <View style={styles.formContainer}>
+        <Text style={styles.formTitle}>
+          {isEditing ? `Edit Menu - Kantin ${selectedCanteen}` : `Tambah Menu Baru - Kantin ${selectedCanteen}`}
+        </Text>
+        
         <TextInput
           style={styles.input}
           placeholder="Nama Makanan"
@@ -269,21 +313,14 @@ const ManageFood = () => {
         {isEditing && (
           <TouchableOpacity
             style={styles.cancelButton}
-            onPress={() => {
-              setName('');
-              setPrice('');
-              setDescription('');
-              setImage(null);
-              setIsEditing(false);
-              setEditId(null);
-            }}
+            onPress={resetForm}
           >
             <Text style={styles.cancelButtonText}>Batal Edit</Text>
           </TouchableOpacity>
         )}
       </View>
       
-      <Text style={styles.subHeader}>Daftar Menu</Text>
+      <Text style={styles.subHeader}>Menu Kantin {selectedCanteen}</Text>
       {isLoading && foods.length === 0 ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#4285F4" />
@@ -301,6 +338,7 @@ const ManageFood = () => {
               <View style={styles.foodInfo}>
                 <Text style={styles.foodName}>{food.name}</Text>
                 <Text style={styles.foodPrice}>Rp {food.price.toLocaleString()}</Text>
+                <Text style={styles.canteenBadge}>Kantin {food.canteen}</Text>
                 <Text style={styles.foodDescription} numberOfLines={2}>
                   {food.description}
                 </Text>
@@ -313,7 +351,6 @@ const ManageFood = () => {
                     <Ionicons name="create-outline" size={20} color="#fff" />
                   </TouchableOpacity>
                   
-                  {/* Direct TouchableOpacity with onPress handler */}
                   <TouchableOpacity
                     style={[styles.deleteButton, isLoading && styles.disabledButton]}
                     onPress={() => handleDeletePress(food.id)}
@@ -329,7 +366,7 @@ const ManageFood = () => {
           
           {foods.length === 0 && (
             <View style={styles.emptyContainer}>
-              <Text style={styles.emptyText}>Belum ada menu makanan tersedia</Text>
+              <Text style={styles.emptyText}>Belum ada menu makanan di Kantin {selectedCanteen}</Text>
             </View>
           )}
         </View>
@@ -350,6 +387,31 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     textAlign: 'center',
   },
+  canteenContainer: {
+    backgroundColor: '#fff',
+    padding: 15,
+    borderRadius: 10,
+    marginBottom: 15,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 5,
+    elevation: 3,
+  },
+  canteenLabel: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 10,
+    color: '#333',
+  },
+  canteenPicker: {
+    backgroundColor: '#f2f2f2',
+    borderRadius: 10,
+    overflow: 'hidden',
+  },
+  picker: {
+    height: 50,
+  },
   formContainer: {
     backgroundColor: '#fff',
     padding: 15,
@@ -360,6 +422,13 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 5,
     elevation: 3,
+  },
+  formTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 15,
+    color: '#4285F4',
+    textAlign: 'center',
   },
   input: {
     backgroundColor: '#f2f2f2',
@@ -462,6 +531,16 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#4285F4',
     marginVertical: 5,
+  },
+  canteenBadge: {
+    fontSize: 12,
+    color: '#fff',
+    backgroundColor: '#34A853',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+    alignSelf: 'flex-start',
+    marginBottom: 5,
   },
   foodDescription: {
     fontSize: 12,
