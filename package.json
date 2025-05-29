@@ -15,12 +15,15 @@
     "@react-navigation/bottom-tabs": "^7.3.10",
     "@react-navigation/native": "^7.1.6",
     "@react-navigation/stack": "^7.2.10",
+    "axios": "^1.9.0",
     "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
     "expo": "~52.0.46",
     "expo-file-system": "~18.0.12",
     "expo-image-picker": "~16.0.6",
     "expo-status-bar": "~2.0.1",
     "expo-web-browser": "~14.0.2",
+    "express": "^5.1.0",
     "firebase": "^11.6.1",
     "firebase-admin": "^13.4.0",
     "midtrans-client": "^1.4.2",
@@ -41,5 +44,17 @@
     "@babel/core": "^7.20.0",
     "@react-native-community/cli": "^18.0.0"
   },
-  "private": true
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/denta120208/Aplikasi--KantinMs.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/denta120208/Aplikasi--KantinMs/issues"
+  },
+  "homepage": "https://github.com/denta120208/Aplikasi--KantinMs#readme",
+  "description": ""
 }
