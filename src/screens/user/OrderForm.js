@@ -7,10 +7,23 @@ import {
   TouchableOpacity, 
   ScrollView, 
   Image, 
-  Alert 
+  Alert,
+  Linking,
+  Platform
 } from 'react-native';
+// Conditional import for WebView - only import on mobile platforms
+const WebView = Platform.OS === 'web' ? null : require('react-native-webview').WebView;
+
 import { db } from '../../config/firebaseConfig';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { 
+  collection, 
+  addDoc, 
+  serverTimestamp, 
+  query, 
+  where, 
+  getDocs, 
+  updateDoc 
+} from 'firebase/firestore';
 
 const OrderForm = ({ route, navigation }) => {
   // Check if route.params exists before destructuring
@@ -36,6 +49,9 @@ const OrderForm = ({ route, navigation }) => {
   const [quantity, setQuantity] = useState('1');
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showPayment, setShowPayment] = useState(false);
+  const [paymentUrl, setPaymentUrl] = useState('');
+  const [orderId, setOrderId] = useState('');
 
   // FIXED: Get kantin info - REMOVE DEFAULT VALUE
   let kantin = food.canteen || food.kantin;
@@ -85,6 +101,134 @@ const OrderForm = ({ route, navigation }) => {
     return colors[kantinId] || '#FF9800';
   };
 
+  // Function to check payment status from Midtrans
+  const checkPaymentStatus = async (orderId) => {
+    try {
+      // Midtrans Status Check API
+      const statusUrl = `https://api.sandbox.midtrans.com/v2/${orderId}/status`;
+      const serverKey = 'SB-Mid-server-wE-e3Dx5VmUYCzVXTuWzRH4P';
+      
+      const response = await fetch(statusUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Basic ${btoa(serverKey + ':')}`
+        }
+      });
+      
+      const result = await response.json();
+      
+      if (result.transaction_status) {
+        return {
+          status: result.transaction_status,
+          paymentType: result.payment_type,
+          fraudStatus: result.fraud_status
+        };
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('Error checking payment status:', error);
+      return null;
+    }
+  };
+
+  // Function to update payment status in Firebase
+  const updatePaymentStatusInFirebase = async (midtransOrderId, paymentStatus) => {
+    try {
+      // Update di koleksi kantin-specific
+      const kantinCollectionName = `orders_kantin_${kantin.toLowerCase()}`;
+      const kantinQuery = query(
+        collection(db, kantinCollectionName),
+        where('midtransOrderId', '==', midtransOrderId)
+      );
+      const kantinSnapshot = await getDocs(kantinQuery);
+      
+      kantinSnapshot.docs.forEach(async (doc) => {
+        await updateDoc(doc.ref, { paymentStatus });
+      });
+      
+      // Update di general orders collection
+      const generalQuery = query(
+        collection(db, 'orders'),
+        where('midtransOrderId', '==', midtransOrderId)
+      );
+      const generalSnapshot = await getDocs(generalQuery);
+      
+      generalSnapshot.docs.forEach(async (doc) => {
+        await updateDoc(doc.ref, { paymentStatus });
+      });
+      
+      console.log('✅ Payment status updated successfully');
+    } catch (error) {
+      console.error('❌ Error updating payment status:', error);
+    }
+  };
+
+  // Function to create Midtrans payment
+  const createPayment = async (orderData) => {
+    try {
+      // Generate unique order ID
+      const orderId = `ORDER-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      
+      // Midtrans Snap API endpoint (Sandbox)
+      const midtransUrl = 'https://app.sandbox.midtrans.com/snap/v1/transactions';
+      
+      // Your server key from Midtrans dashboard
+      const serverKey = 'SB-Mid-server-wE-e3Dx5VmUYCzVXTuWzRH4P'; // Replace with your actual server key
+      
+      const paymentData = {
+        transaction_details: {
+          order_id: orderId,
+          gross_amount: orderData.totalAmount
+        },
+        customer_details: {
+          first_name: orderData.userName.split(' ')[0] || 'Customer',
+          last_name: orderData.userName.split(' ').slice(1).join(' ') || '',
+          email: orderData.userEmail,
+        },
+        item_details: orderData.items.map(item => ({
+          id: item.id,
+          price: item.price,
+          quantity: item.quantity,
+          name: item.name
+        })),
+        credit_card: {
+          secure: true
+        },
+        callbacks: {
+          finish: Platform.OS === 'web' ? `${window.location.origin}/payment-success` : 'myapp://payment-success',
+          error: Platform.OS === 'web' ? `${window.location.origin}/payment-error` : 'myapp://payment-error',
+          pending: Platform.OS === 'web' ? `${window.location.origin}/payment-pending` : 'myapp://payment-pending'
+        }
+      };
+
+      const response = await fetch(midtransUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Basic ${btoa(serverKey + ':')}`
+        },
+        body: JSON.stringify(paymentData)
+      });
+
+      const result = await response.json();
+      
+      if (result.token && result.redirect_url) {
+        return {
+          success: true,
+          orderId: orderId,
+          token: result.token,
+          redirectUrl: result.redirect_url
+        };
+      } else {
+        throw new Error(result.error_messages?.[0] || 'Failed to create payment');
+      }
+    } catch (error) {
+      console.error('Payment creation error:', error);
+      throw error;
+    }
+  };
+
   const handleSubmitOrder = async () => {
     const qty = parseInt(quantity);
     if (isNaN(qty) || qty < 1) {
@@ -105,85 +249,219 @@ const OrderForm = ({ route, navigation }) => {
         userId: user.uid,
         userName: user.displayName || user.email,
         userEmail: user.email,
-        kantin: kantin, // Make sure kantin is properly set
+        kantin: kantin,
         kantinName: getKantinName(kantin),
         items: [{
           id: food.id,
           name: food.name,
           price: food.price,
           quantity: qty,
-          kantin: kantin // Also store kantin in item for reference
+          kantin: kantin
         }],
         totalAmount: food.price * qty,
         notes,
         status: 'pending',
+        paymentStatus: 'pending', // Add payment status
         createdAt: serverTimestamp()
       };
 
-      console.log('Sending order to collection:', `orders_kantin_${kantin.toLowerCase()}`);
-      console.log('Order data:', orderData);
+      console.log('Creating payment for order:', orderData);
 
-      // Primary: Store order in kantin-specific collection
-      const kantinCollectionName = `orders_kantin_${kantin.toLowerCase()}`;
+      // Create Midtrans payment
+      const paymentResult = await createPayment(orderData);
       
-      try {
-        await addDoc(collection(db, kantinCollectionName), orderData);
-        console.log(`✅ Order successfully added to ${kantinCollectionName}`);
-      } catch (kantinError) {
-        console.error(`❌ Error adding to ${kantinCollectionName}:`, kantinError);
+      if (paymentResult.success) {
+        // Add order ID from Midtrans
+        orderData.midtransOrderId = paymentResult.orderId;
+        orderData.paymentToken = paymentResult.token;
         
-        // If kantin collection doesn't exist, show specific error
-        if (kantinError.code === 'permission-denied' || kantinError.message.includes('collection')) {
-          throw new Error(`Collection ${kantinCollectionName} tidak ditemukan. Silakan hubungi admin untuk membuat collection ini di Firebase.`);
-        }
-        throw kantinError;
-      }
-      
-      // Secondary: Also store in general orders collection for overall tracking by super admin
-      try {
-        await addDoc(collection(db, 'orders'), orderData);
-        console.log('✅ Order also added to general orders collection');
-      } catch (generalError) {
-        console.log('⚠️ General orders collection update failed, but kantin-specific order saved successfully');
-        console.error(generalError);
-      }
-      
-      Alert.alert(
-        'Pesanan Berhasil!',
-        `Pesanan Anda ke ${getKantinName(kantin)} telah dikirim dan sedang menunggu konfirmasi.`,
-        [
-          { 
-            text: 'Lihat Pesanan', 
-            onPress: () => {
-              // Navigate to user orders screen if available
-              navigation.navigate('UserOrdersScreen');
-            }
-          },
-          { 
-            text: 'OK', 
-            onPress: () => navigation.goBack() 
+        // Store order in Firebase with payment info
+        const kantinCollectionName = `orders_kantin_${kantin.toLowerCase()}`;
+        
+        try {
+          const docRef = await addDoc(collection(db, kantinCollectionName), orderData);
+          console.log(`✅ Order successfully added to ${kantinCollectionName} with ID:`, docRef.id);
+          
+          // Also store in general orders collection
+          try {
+            await addDoc(collection(db, 'orders'), { ...orderData, firebaseOrderId: docRef.id });
+            console.log('✅ Order also added to general orders collection');
+          } catch (generalError) {
+            console.log('⚠️ General orders collection update failed, but kantin-specific order saved successfully');
           }
-        ]
-      );
+          
+          // Handle payment differently for web and mobile
+          if (Platform.OS === 'web') {
+            // For web, open payment URL in new tab/window
+            Alert.alert(
+              'Pembayaran',
+              'Anda akan diarahkan ke halaman pembayaran Midtrans. Setelah pembayaran selesai, kembali ke aplikasi ini.',
+              [
+                {
+                  text: 'Buka Pembayaran',
+                  onPress: () => {
+                    window.open(paymentResult.redirectUrl, '_blank');
+                    // Show order tracking info
+                    setOrderId(paymentResult.orderId);
+                    showPaymentInstructions();
+                  }
+                },
+                {
+                  text: 'Batal',
+                  style: 'cancel'
+                }
+              ]
+            );
+          } else {
+            // For mobile, show WebView
+            setOrderId(paymentResult.orderId);
+            setPaymentUrl(paymentResult.redirectUrl);
+            setShowPayment(true);
+          }
+          
+        } catch (kantinError) {
+          console.error(`❌ Error adding to ${kantinCollectionName}:`, kantinError);
+          throw new Error(`Collection ${kantinCollectionName} tidak ditemukan. Silakan hubungi admin.`);
+        }
+      }
     } catch (error) {
-      console.error('Error adding order:', error);
+      console.error('Error creating order:', error);
       Alert.alert(
         'Error', 
-        `Gagal mengirim pesanan ke ${getKantinName(kantin)}. 
-        
-Error: ${error.message}
-
-Kemungkinan penyebab:
-1. Collection orders_kantin_${kantin.toLowerCase()} belum dibuat di Firebase
-2. Koneksi internet tidak stabil
-3. Permissions Firebase belum diatur
-
-Silakan hubungi admin atau coba lagi.`,
+        `Gagal membuat pesanan: ${error.message}`,
         [{ text: 'OK' }]
       );
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  // Show payment instructions for web platform
+  const showPaymentInstructions = () => {
+    Alert.alert(
+      'Pesanan Dibuat',
+      `Pesanan Anda dengan ID ${orderId} telah dibuat. Silakan selesaikan pembayaran di tab yang baru dibuka. Setelah pembayaran selesai, cek status pesanan di menu "Pesanan Saya".`,
+      [
+        {
+          text: 'Lihat Pesanan',
+          onPress: () => navigation.navigate('UserOrdersScreen')
+        },
+        {
+          text: 'OK',
+          onPress: () => navigation.goBack()
+        }
+      ]
+    );
+  };
+
+  // Handle WebView navigation state changes (only for mobile)
+  const handleNavigationStateChange = (navState) => {
+    console.log('Navigation state:', navState.url);
+    
+    // Check for payment completion URLs
+    if (navState.url.includes('payment-success') || navState.url.includes('transaction_status=capture')) {
+      handlePaymentSuccess();
+    } else if (navState.url.includes('payment-error') || navState.url.includes('transaction_status=deny')) {
+      handlePaymentError();
+    } else if (navState.url.includes('payment-pending') || navState.url.includes('transaction_status=pending')) {
+      handlePaymentPending();
+    }
+  };
+
+  // Updated handlePaymentSuccess function with payment status checking
+  const handlePaymentSuccess = async () => {
+    try {
+      // Check actual payment status from Midtrans
+      const paymentStatus = await checkPaymentStatus(orderId);
+      
+      if (paymentStatus && ['capture', 'settlement'].includes(paymentStatus.status)) {
+        // Update Firebase dengan status pembayaran yang tepat
+        await updatePaymentStatusInFirebase(orderId, 'paid');
+        
+        Alert.alert(
+          'Pembayaran Berhasil!',
+          `Pembayaran untuk pesanan ${orderId} telah berhasil. Pesanan Anda sedang diproses.`,
+          [
+            { 
+              text: 'Lihat Pesanan', 
+              onPress: () => {
+                setShowPayment(false);
+                navigation.navigate('UserOrdersScreen');
+              }
+            },
+            { 
+              text: 'OK', 
+              onPress: () => {
+                setShowPayment(false);
+                navigation.goBack();
+              }
+            }
+          ]
+        );
+      } else {
+        // Payment not confirmed yet, treat as pending
+        handlePaymentPending();
+      }
+    } catch (error) {
+      console.error('Error updating payment status:', error);
+      // Fallback to showing success message even if status check fails
+      Alert.alert(
+        'Pembayaran Berhasil!',
+        `Pembayaran untuk pesanan ${orderId} telah berhasil. Pesanan Anda sedang diproses.`,
+        [
+          { 
+            text: 'Lihat Pesanan', 
+            onPress: () => {
+              setShowPayment(false);
+              navigation.navigate('UserOrdersScreen');
+            }
+          },
+          { 
+            text: 'OK', 
+            onPress: () => {
+              setShowPayment(false);
+              navigation.goBack();
+            }
+          }
+        ]
+      );
+    }
+  };
+
+  const handlePaymentError = () => {
+    Alert.alert(
+      'Pembayaran Gagal',
+      'Pembayaran tidak dapat diproses. Silakan coba lagi.',
+      [
+        { 
+          text: 'Coba Lagi', 
+          onPress: () => setShowPayment(false)
+        },
+        { 
+          text: 'Batal', 
+          onPress: () => {
+            setShowPayment(false);
+            navigation.goBack();
+          }
+        }
+      ]
+    );
+  };
+
+  const handlePaymentPending = () => {
+    Alert.alert(
+      'Pembayaran Tertunda',
+      'Pembayaran Anda sedang diproses. Kami akan memberitahu Anda setelah pembayaran dikonfirmasi.',
+      [
+        { 
+          text: 'OK', 
+          onPress: () => {
+            setShowPayment(false);
+            navigation.goBack();
+          }
+        }
+      ]
+    );
   };
 
   const handleQuantityChange = (value) => {
@@ -205,6 +483,46 @@ Silakan hubungi admin atau coba lagi.`,
 
   const totalPrice = food.price * (parseInt(quantity) || 0);
 
+  // Show payment WebView if payment is initiated (mobile only)
+  if (showPayment && paymentUrl && Platform.OS !== 'web' && WebView) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.paymentHeader}>
+          <TouchableOpacity 
+            style={styles.closePaymentButton}
+            onPress={() => {
+              Alert.alert(
+                'Batalkan Pembayaran?',
+                'Apakah Anda yakin ingin membatalkan pembayaran?',
+                [
+                  { text: 'Tidak', style: 'cancel' },
+                  { 
+                    text: 'Ya', 
+                    onPress: () => {
+                      setShowPayment(false);
+                      navigation.goBack();
+                    }
+                  }
+                ]
+              );
+            }}
+          >
+            <Text style={styles.closePaymentButtonText}>✕ Tutup</Text>
+          </TouchableOpacity>
+          <Text style={styles.paymentTitle}>Pembayaran - {orderId}</Text>
+        </View>
+        <WebView
+          source={{ uri: paymentUrl }}
+          onNavigationStateChange={handleNavigationStateChange}
+          startInLoadingState={true}
+          scalesPageToFit={true}
+          javaScriptEnabled={true}
+          domStorageEnabled={true}
+        />
+      </View>
+    );
+  }
+
   return (
     <ScrollView style={styles.container}>
       <Image 
@@ -224,16 +542,6 @@ Silakan hubungi admin atau coba lagi.`,
         {food.description && (
           <Text style={styles.foodDescription}>{food.description}</Text>
         )}
-        
-        {/* Enhanced Debug info */}
-        <View style={styles.debugContainer}>
-          <Text style={styles.debugText}>🔍 Debug Info:</Text>
-          <Text style={styles.debugText}>food.canteen = "{food.canteen || 'undefined'}"</Text>
-          <Text style={styles.debugText}>food.kantin = "{food.kantin || 'undefined'}"</Text>
-          <Text style={styles.debugText}>✅ Final Kantin = "{kantin}"</Text>
-          <Text style={styles.debugText}>📂 Collection: orders_kantin_{kantin.toLowerCase()}</Text>
-          <Text style={styles.debugText}>🎯 Kantin Name: {getKantinName(kantin)}</Text>
-        </View>
         
         <View style={styles.formContainer}>
           <Text style={styles.formLabel}>Jumlah Pesanan</Text>
@@ -302,12 +610,15 @@ Silakan hubungi admin atau coba lagi.`,
             disabled={isSubmitting}
           >
             <Text style={styles.orderButtonText}>
-              {isSubmitting ? 'Memproses Pesanan...' : `Pesan ke ${getKantinName(kantin)}`}
+              {isSubmitting ? 'Memproses Pesanan...' : `💳 Bayar & Pesan ke ${getKantinName(kantin)}`}
             </Text>
           </TouchableOpacity>
           
           <Text style={styles.infoText}>
-            Pesanan akan langsung dikirim ke {getKantinName(kantin)} dan akan diproses setelah dikonfirmasi oleh admin kantin.
+            {Platform.OS === 'web' 
+              ? 'Anda akan diarahkan ke halaman pembayaran Midtrans di tab baru untuk menyelesaikan transaksi.'
+              : 'Anda akan diarahkan ke halaman pembayaran Midtrans untuk menyelesaikan transaksi.'
+            }
           </Text>
         </View>
       </View>
@@ -341,6 +652,32 @@ const styles = StyleSheet.create({
   goBackButtonText: {
     color: '#fff',
     fontWeight: 'bold',
+  },
+  paymentHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 15,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  closePaymentButton: {
+    padding: 8,
+    backgroundColor: '#f44336',
+    borderRadius: 5,
+  },
+  closePaymentButtonText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 12,
+  },
+  paymentTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333',
+    flex: 1,
+    textAlign: 'center',
   },
   foodImage: {
     width: '100%',
@@ -378,20 +715,6 @@ const styles = StyleSheet.create({
     color: '#666',
     marginBottom: 20,
     lineHeight: 20,
-  },
-  debugContainer: {
-    backgroundColor: '#fff3cd',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 15,
-    borderLeftWidth: 4,
-    borderLeftColor: '#ffeb3b',
-  },
-  debugText: {
-    fontSize: 11,
-    color: '#856404',
-    fontFamily: 'monospace',
-    marginBottom: 2,
   },
   formContainer: {
     backgroundColor: '#fff',

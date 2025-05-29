@@ -46,6 +46,85 @@ const UserOrders = ({ route }) => {
     return () => unsubscribe();
   }, [adminKantin, selectedKantin]);
 
+  // Function to check Midtrans payment status
+  const checkMidtransPaymentStatus = async (midtransOrderId) => {
+    try {
+      const statusUrl = `https://api.sandbox.midtrans.com/v2/${midtransOrderId}/status`;
+      const serverKey = 'SB-Mid-server-wE-e3Dx5VmUYCzVXTuWzRH4P'; // Replace with your server key
+      
+      const response = await fetch(statusUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Basic ${btoa(serverKey + ':')}`
+        }
+      });
+      
+      const result = await response.json();
+      return result;
+    } catch (error) {
+      console.error('Error checking Midtrans status:', error);
+      return null;
+    }
+  };
+
+  // Function to update payment status
+  const updatePaymentStatus = async (orderId, orderKantin, midtransOrderId) => {
+    try {
+      // Check status from Midtrans
+      const midtransStatus = await checkMidtransPaymentStatus(midtransOrderId);
+      
+      if (!midtransStatus) {
+        Alert.alert('Error', 'Gagal mengecek status pembayaran dari Midtrans');
+        return;
+      }
+      
+      let newPaymentStatus = 'pending';
+      
+      // Map Midtrans status to internal status
+      switch (midtransStatus.transaction_status) {
+        case 'capture':
+        case 'settlement':
+          newPaymentStatus = 'paid';
+          break;
+        case 'pending':
+          newPaymentStatus = 'pending';
+          break;
+        case 'deny':
+        case 'cancel':
+        case 'expire':
+          newPaymentStatus = 'failed';
+          break;
+        default:
+          newPaymentStatus = midtransStatus.transaction_status;
+      }
+      
+      // Update in Firebase
+      if (adminKantin !== 'all') {
+        await updateDoc(doc(db, `orders_kantin_${adminKantin.toLowerCase()}`, orderId), {
+          paymentStatus: newPaymentStatus
+        });
+      }
+      
+      // Update in general orders
+      try {
+        await updateDoc(doc(db, 'orders', orderId), {
+          paymentStatus: newPaymentStatus
+        });
+      } catch (generalError) {
+        console.log('General orders update failed');
+      }
+      
+      Alert.alert(
+        'Status Updated', 
+        `Payment status updated to: ${getPaymentStatusText(newPaymentStatus)}`
+      );
+      
+    } catch (error) {
+      Alert.alert('Error', 'Gagal mengupdate status pembayaran');
+      console.error('Error updating payment status:', error);
+    }
+  };
+
   const toggleExpand = (orderId) => {
     setExpandedOrderId(expandedOrderId === orderId ? null : orderId);
   };
@@ -193,6 +272,25 @@ const UserOrders = ({ route }) => {
     }
   };
 
+  // Get payment status color
+  const getPaymentStatusColor = (paymentStatus) => {
+    switch (paymentStatus) {
+      case 'pending':
+        return '#FFC107';
+      case 'paid':
+      case 'capture':
+      case 'settlement':
+        return '#4CAF50';
+      case 'failed':
+      case 'deny':
+      case 'cancel':
+      case 'expire':
+        return '#F44336';
+      default:
+        return '#757575';
+    }
+  };
+
   const getKantinColor = (kantin) => {
     const colors = {
       'A': '#FF5722',
@@ -231,6 +329,21 @@ const UserOrders = ({ route }) => {
       'cancelled': 'Dibatalkan'
     };
     return statusTexts[status] || status;
+  };
+
+  // Get payment status text
+  const getPaymentStatusText = (paymentStatus) => {
+    const statusTexts = {
+      'pending': 'Menunggu Pembayaran',
+      'paid': 'Sudah Dibayar',
+      'capture': 'Sudah Dibayar',
+      'settlement': 'Sudah Dibayar',
+      'failed': 'Pembayaran Gagal',
+      'deny': 'Pembayaran Ditolak',
+      'cancel': 'Pembayaran Dibatalkan',
+      'expire': 'Pembayaran Expired'
+    };
+    return statusTexts[paymentStatus] || 'Status Tidak Dikenal';
   };
 
   return (
@@ -344,10 +457,42 @@ const UserOrders = ({ route }) => {
                   <Text style={styles.orderTotalSmall}>
                     Total: Rp {order.totalAmount.toLocaleString()}
                   </Text>
+                  
+                  {/* Show Midtrans Order ID if available */}
+                  {order.midtransOrderId && (
+                    <Text style={styles.orderIdText}>
+                      ID: {order.midtransOrderId}
+                    </Text>
+                  )}
                 </View>
                 <View style={styles.orderHeaderRight}>
-                  <View style={[styles.statusBadge, { backgroundColor: getStatusColor(order.status) }]}>
-                    <Text style={styles.statusText}>{getStatusText(order.status)}</Text>
+                  <View style={styles.statusContainer}>
+                    {/* Order Status */}
+                    <View style={[styles.statusBadge, { backgroundColor: getStatusColor(order.status) }]}>
+                      <Text style={styles.statusText}>{getStatusText(order.status)}</Text>
+                    </View>
+                    
+                    {/* Payment Status */}
+                    <View style={[
+                      styles.paymentStatusBadge, 
+                      { backgroundColor: getPaymentStatusColor(order.paymentStatus || 'pending') }
+                    ]}>
+                      <Ionicons 
+                        name={
+                          ['paid', 'capture', 'settlement'].includes(order.paymentStatus) 
+                            ? 'checkmark-circle' 
+                            : order.paymentStatus === 'pending' 
+                              ? 'time' 
+                              : 'close-circle'
+                        } 
+                        size={12} 
+                        color="#fff" 
+                        style={styles.paymentIcon}
+                      />
+                      <Text style={styles.paymentStatusText}>
+                        {getPaymentStatusText(order.paymentStatus || 'pending')}
+                      </Text>
+                    </View>
                   </View>
                   <Ionicons 
                     name={expandedOrderId === order.id ? 'chevron-up' : 'chevron-down'} 
@@ -368,6 +513,32 @@ const UserOrders = ({ route }) => {
                     </View>
                   ))}
                   
+                  {/* Payment Information */}
+                  <View style={styles.paymentInfoContainer}>
+                    <Text style={styles.paymentInfoTitle}>Informasi Pembayaran:</Text>
+                    <View style={styles.paymentInfoRow}>
+                      <Text style={styles.paymentInfoLabel}>Status Pembayaran:</Text>
+                      <Text style={[
+                        styles.paymentInfoValue,
+                        { color: getPaymentStatusColor(order.paymentStatus || 'pending') }
+                      ]}>
+                        {getPaymentStatusText(order.paymentStatus || 'pending')}
+                      </Text>
+                    </View>
+                    {order.midtransOrderId && (
+                      <View style={styles.paymentInfoRow}>
+                        <Text style={styles.paymentInfoLabel}>Order ID:</Text>
+                        <Text style={styles.paymentInfoValue}>{order.midtransOrderId}</Text>
+                      </View>
+                    )}
+                    {order.paymentToken && (
+                      <View style={styles.paymentInfoRow}>
+                        <Text style={styles.paymentInfoLabel}>Token:</Text>
+                        <Text style={styles.paymentInfoValue}>{order.paymentToken.substring(0, 20)}...</Text>
+                      </View>
+                    )}
+                  </View>
+                  
                   {order.notes && (
                     <View style={styles.notesContainer}>
                       <Text style={styles.notesLabel}>Catatan:</Text>
@@ -383,28 +554,64 @@ const UserOrders = ({ route }) => {
                   </View>
                   
                   <View style={styles.orderActions}>
-                    {order.status === 'pending' && (
+                    {/* Only show action buttons if payment is successful */}
+                    {['paid', 'capture', 'settlement'].includes(order.paymentStatus) && (
                       <>
-                        <TouchableOpacity
-                          style={[styles.actionButton, styles.processButton]}
-                          onPress={() => updateOrderStatus(order.id, 'processing', order.kantin)}
-                        >
-                          <Text style={styles.actionButtonText}>Proses</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={[styles.actionButton, styles.cancelButton]}
-                          onPress={() => updateOrderStatus(order.id, 'cancelled', order.kantin)}
-                        >
-                          <Text style={styles.actionButtonText}>Tolak</Text>
-                        </TouchableOpacity>
+                        {order.status === 'pending' && (
+                          <>
+                            <TouchableOpacity
+                              style={[styles.actionButton, styles.processButton]}
+                              onPress={() => updateOrderStatus(order.id, 'processing', order.kantin)}
+                            >
+                              <Text style={styles.actionButtonText}>Proses</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={[styles.actionButton, styles.cancelButton]}
+                              onPress={() => updateOrderStatus(order.id, 'cancelled', order.kantin)}
+                            >
+                              <Text style={styles.actionButtonText}>Tolak</Text>
+                            </TouchableOpacity>
+                          </>
+                        )}
+                        {order.status === 'processing' && (
+                          <TouchableOpacity
+                            style={[styles.actionButton, styles.completeButton]}
+                            onPress={() => updateOrderStatus(order.id, 'completed', order.kantin)}
+                          >
+                            <Text style={styles.actionButtonText}>Selesai</Text>
+                          </TouchableOpacity>
+                        )}
                       </>
                     )}
-                    {order.status === 'processing' && (
+                    
+                    {/* Show waiting for payment message */}
+                    {order.paymentStatus === 'pending' && (
+                      <View style={styles.waitingPaymentContainer}>
+                        <Ionicons name="time" size={20} color="#FFC107" />
+                        <Text style={styles.waitingPaymentText}>
+                          Menunggu pembayaran dari customer
+                        </Text>
+                      </View>
+                    )}
+                    
+                    {/* Show payment failed message */}
+                    {['failed', 'deny', 'cancel', 'expire'].includes(order.paymentStatus) && (
+                      <View style={styles.paymentFailedContainer}>
+                        <Ionicons name="close-circle" size={20} color="#F44336" />
+                        <Text style={styles.paymentFailedText}>
+                          Pembayaran gagal atau dibatalkan
+                        </Text>
+                      </View>
+                    )}
+
+                    {/* Manual Payment Status Check Button */}
+                    {order.midtransOrderId && ['pending', 'failed'].includes(order.paymentStatus || 'pending') && (
                       <TouchableOpacity
-                        style={[styles.actionButton, styles.completeButton]}
-                        onPress={() => updateOrderStatus(order.id, 'completed', order.kantin)}
+                        style={[styles.actionButton, styles.checkPaymentButton]}
+                        onPress={() => updatePaymentStatus(order.id, order.kantin, order.midtransOrderId)}
                       >
-                        <Text style={styles.actionButtonText}>Selesai</Text>
+                        <Ionicons name="refresh" size={16} color="#fff" style={styles.refreshIcon} />
+                        <Text style={styles.actionButtonText}>Cek Status Bayar</Text>
                       </TouchableOpacity>
                     )}
                   </View>
@@ -565,15 +772,40 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginTop: 3,
   },
+  orderIdText: {
+    color: '#888',
+    fontSize: 10,
+    fontFamily: 'monospace',
+    marginTop: 2,
+  },
+  statusContainer: {
+    alignItems: 'flex-end',
+    marginRight: 10,
+  },
   statusBadge: {
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 10,
-    marginRight: 10,
+    marginBottom: 4,
   },
   statusText: {
     color: '#fff',
     fontSize: 12,
+    fontWeight: 'bold',
+  },
+  paymentStatusBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  paymentIcon: {
+    marginRight: 3,
+  },
+  paymentStatusText: {
+    color: '#fff',
+    fontSize: 10,
     fontWeight: 'bold',
   },
   orderDetails: {
@@ -607,11 +839,42 @@ const styles = StyleSheet.create({
     color: '#333',
     fontWeight: '500',
   },
+  paymentInfoContainer: {
+    marginTop: 15,
+    padding: 12,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 8,
+    borderLeftWidth: 4,
+    borderLeftColor: '#4285F4',
+  },
+  paymentInfoTitle: {
+    fontWeight: 'bold',
+    marginBottom: 8,
+    color: '#333',
+    fontSize: 14,
+  },
+  paymentInfoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  paymentInfoLabel: {
+    color: '#666',
+    fontSize: 12,
+    flex: 1,
+  },
+  paymentInfoValue: {
+    color: '#333',
+    fontSize: 12,
+    fontWeight: '500',
+    flex: 2,
+    textAlign: 'right',
+  },
   notesContainer: {
     marginTop: 10,
     padding: 10,
     backgroundColor: '#f8f8f8',
-    borderRadius: 5,
+    borderRadius: 8,
   },
   notesLabel: {
     fontWeight: 'bold',
@@ -664,6 +927,38 @@ const styles = StyleSheet.create({
   actionButtonText: {
     color: '#fff',
     fontWeight: 'bold',
+  },
+  // NEW: Waiting payment container
+  waitingPaymentContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFF3E0',
+    padding: 12,
+    borderRadius: 8,
+    flex: 1,
+  },
+  waitingPaymentText: {
+    color: '#F57C00',
+    marginLeft: 8,
+    fontWeight: '500',
+    fontSize: 12,
+  },
+  // NEW: Payment failed container
+  paymentFailedContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFEBEE',
+    padding: 12,
+    borderRadius: 8,
+    flex: 1,
+  },
+  paymentFailedText: {
+    color: '#C62828',
+    marginLeft: 8,
+    fontWeight: '500',
+    fontSize: 12,
   },
 });
 
