@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { db } from '../../config/firebaseConfig';
@@ -9,6 +9,10 @@ const UserOrders = ({ route }) => {
   const [expandedOrderId, setExpandedOrderId] = useState(null);
   const [selectedKantin, setSelectedKantin] = useState('all');
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isCheckingPayment, setIsCheckingPayment] = useState({});
+  
+  // Use ref to store interval ID
+  const paymentCheckInterval = useRef(null);
   
   // Get admin kantin from route params or default to 'all' for super admin
   const adminKantin = route?.params?.kantin || 'all';
@@ -46,45 +50,113 @@ const UserOrders = ({ route }) => {
     return () => unsubscribe();
   }, [adminKantin, selectedKantin]);
 
-  // Function to check Midtrans payment status
+  // Auto-check payment status for pending payments
+  useEffect(() => {
+    const checkPendingPayments = async () => {
+      const pendingOrders = orders.filter(order => 
+        order.paymentStatus === 'pending' && 
+        order.midtransOrderId &&
+        // Only check orders created in the last 24 hours to avoid unnecessary API calls
+        (new Date() - order.createdAt) < 24 * 60 * 60 * 1000
+      );
+
+      if (pendingOrders.length > 0) {
+        console.log(`Auto-checking ${pendingOrders.length} pending payments...`);
+        
+        for (const order of pendingOrders) {
+          try {
+            await checkAndUpdatePaymentStatus(order.id, order.kantin, order.midtransOrderId, false);
+            // Add delay between API calls to avoid rate limiting
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          } catch (error) {
+            console.error(`Auto-check failed for order ${order.id}:`, error);
+          }
+        }
+      }
+    };
+
+    // Start auto-checking if there are pending orders
+    const pendingCount = orders.filter(order => 
+      order.paymentStatus === 'pending' && order.midtransOrderId
+    ).length;
+    
+    if (pendingCount > 0) {
+      // Check immediately
+      checkPendingPayments();
+      
+      // Set up interval to check every 2 minutes
+      paymentCheckInterval.current = setInterval(checkPendingPayments, 2 * 60 * 1000);
+    } else {
+      // Clear interval if no pending orders
+      if (paymentCheckInterval.current) {
+        clearInterval(paymentCheckInterval.current);
+        paymentCheckInterval.current = null;
+      }
+    }
+
+    // Cleanup interval on unmount or when orders change
+    return () => {
+      if (paymentCheckInterval.current) {
+        clearInterval(paymentCheckInterval.current);
+        paymentCheckInterval.current = null;
+      }
+    };
+  }, [orders]);
+
+  // FIXED: Function to check Midtrans payment status via backend proxy
   const checkMidtransPaymentStatus = async (midtransOrderId) => {
     try {
-      const statusUrl = `https://api.sandbox.midtrans.com/v2/${midtransOrderId}/status`;
-      const serverKey = 'SB-Mid-server-wE-e3Dx5VmUYCzVXTuWzRH4P'; // Replace with your server key
+      // Instead of calling Midtrans directly, call your backend API
+      // Replace 'YOUR_BACKEND_URL' with your actual backend URL
+      const statusUrl = `YOUR_BACKEND_URL/api/check-payment-status/${midtransOrderId}`;
       
       const response = await fetch(statusUrl, {
         method: 'GET',
         headers: {
-          'Authorization': `Basic ${btoa(serverKey + ':')}`
+          'Content-Type': 'application/json',
+          // Add any authentication headers if needed
+          // 'Authorization': `Bearer ${userToken}`
         }
       });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
       
       const result = await response.json();
       return result;
     } catch (error) {
       console.error('Error checking Midtrans status:', error);
-      return null;
+      throw error;
     }
   };
 
-  // Function to update payment status
-  const updatePaymentStatus = async (orderId, orderKantin, midtransOrderId) => {
+  // Enhanced function to update payment status
+  const checkAndUpdatePaymentStatus = async (orderId, orderKantin, midtransOrderId, showAlert = true) => {
+    if (isCheckingPayment[orderId]) return; // Prevent multiple simultaneous checks
+    
+    setIsCheckingPayment(prev => ({ ...prev, [orderId]: true }));
+    
     try {
-      // Check status from Midtrans
+      // Check status from Midtrans via backend
       const midtransStatus = await checkMidtransPaymentStatus(midtransOrderId);
       
       if (!midtransStatus) {
-        Alert.alert('Error', 'Gagal mengecek status pembayaran dari Midtrans');
+        if (showAlert) {
+          Alert.alert('Error', 'Gagal mengecek status pembayaran dari Midtrans');
+        }
         return;
       }
       
       let newPaymentStatus = 'pending';
+      let statusChanged = false;
       
       // Map Midtrans status to internal status
       switch (midtransStatus.transaction_status) {
         case 'capture':
         case 'settlement':
           newPaymentStatus = 'paid';
+          statusChanged = true;
           break;
         case 'pending':
           newPaymentStatus = 'pending';
@@ -93,35 +165,61 @@ const UserOrders = ({ route }) => {
         case 'cancel':
         case 'expire':
           newPaymentStatus = 'failed';
+          statusChanged = true;
+          break;
+        case 'failure':
+          newPaymentStatus = 'failed';
+          statusChanged = true;
           break;
         default:
           newPaymentStatus = midtransStatus.transaction_status;
+          statusChanged = true;
       }
       
-      // Update in Firebase
-      if (adminKantin !== 'all') {
-        await updateDoc(doc(db, `orders_kantin_${adminKantin.toLowerCase()}`, orderId), {
-          paymentStatus: newPaymentStatus
-        });
+      // Only update if status has changed
+      if (statusChanged) {
+        // Update in Firebase
+        const updateData = {
+          paymentStatus: newPaymentStatus,
+          lastPaymentCheck: new Date(),
+          midtransTransactionStatus: midtransStatus.transaction_status,
+          midtransPaymentType: midtransStatus.payment_type || null,
+          midtransTransactionTime: midtransStatus.transaction_time || null
+        };
+
+        // Update kantin-specific collection
+        if (adminKantin !== 'all') {
+          await updateDoc(doc(db, `orders_kantin_${adminKantin.toLowerCase()}`, orderId), updateData);
+        }
+        
+        // Update general orders collection
+        try {
+          await updateDoc(doc(db, 'orders', orderId), updateData);
+        } catch (generalError) {
+          console.log('General orders update failed:', generalError);
+        }
+        
+        if (showAlert) {
+          const statusMessage = newPaymentStatus === 'paid' 
+            ? '✅ Pembayaran berhasil dikonfirmasi!' 
+            : `Status pembayaran diperbarui: ${getPaymentStatusText(newPaymentStatus)}`;
+            
+          Alert.alert('Status Updated', statusMessage);
+        } else {
+          // Silent update - just log
+          console.log(`Payment status updated for order ${orderId}: ${newPaymentStatus}`);
+        }
+      } else if (showAlert) {
+        Alert.alert('Info', `Status pembayaran masih: ${getPaymentStatusText(newPaymentStatus)}`);
       }
-      
-      // Update in general orders
-      try {
-        await updateDoc(doc(db, 'orders', orderId), {
-          paymentStatus: newPaymentStatus
-        });
-      } catch (generalError) {
-        console.log('General orders update failed');
-      }
-      
-      Alert.alert(
-        'Status Updated', 
-        `Payment status updated to: ${getPaymentStatusText(newPaymentStatus)}`
-      );
       
     } catch (error) {
-      Alert.alert('Error', 'Gagal mengupdate status pembayaran');
+      if (showAlert) {
+        Alert.alert('Error', 'Gagal mengecek status pembayaran. Coba lagi nanti.');
+      }
       console.error('Error updating payment status:', error);
+    } finally {
+      setIsCheckingPayment(prev => ({ ...prev, [orderId]: false }));
     }
   };
 
@@ -285,6 +383,7 @@ const UserOrders = ({ route }) => {
       case 'deny':
       case 'cancel':
       case 'expire':
+      case 'failure':
         return '#F44336';
       default:
         return '#757575';
@@ -339,12 +438,18 @@ const UserOrders = ({ route }) => {
       'capture': 'Sudah Dibayar',
       'settlement': 'Sudah Dibayar',
       'failed': 'Pembayaran Gagal',
+      'failure': 'Pembayaran Gagal',
       'deny': 'Pembayaran Ditolak',
       'cancel': 'Pembayaran Dibatalkan',
       'expire': 'Pembayaran Expired'
     };
     return statusTexts[paymentStatus] || 'Status Tidak Dikenal';
   };
+
+  // Get count of pending payments for display
+  const pendingPaymentsCount = orders.filter(order => 
+    order.paymentStatus === 'pending' && order.midtransOrderId
+  ).length;
 
   return (
     <ScrollView style={styles.container}>
@@ -372,6 +477,16 @@ const UserOrders = ({ route }) => {
           </TouchableOpacity>
         )}
       </View>
+
+      {/* Auto-check payment status info */}
+      {pendingPaymentsCount > 0 && (
+        <View style={styles.autoCheckInfo}>
+          <Ionicons name="information-circle" size={16} color="#4285F4" />
+          <Text style={styles.autoCheckText}>
+            {`Auto-checking ${pendingPaymentsCount} pending payment${pendingPaymentsCount > 1 ? 's' : ''} every 2 minutes`}
+          </Text>
+        </View>
+      )}
       
       {/* Kantin Filter - only show for super admin */}
       {adminKantin === 'all' && (
@@ -406,7 +521,7 @@ const UserOrders = ({ route }) => {
                   styles.filterButtonText,
                   selectedKantin === kantin && styles.filterButtonTextActive
                 ]}>
-                  Kantin {kantin}
+                  {`Kantin ${kantin}`}
                 </Text>
               </TouchableOpacity>
             ))}
@@ -429,7 +544,7 @@ const UserOrders = ({ route }) => {
           {/* Order Count Info */}
           <View style={styles.orderCountContainer}>
             <Text style={styles.orderCountText}>
-              {orders.length} pesanan ditemukan
+              {`${orders.length} pesanan ditemukan`}
             </Text>
           </View>
           
@@ -455,13 +570,13 @@ const UserOrders = ({ route }) => {
                   </View>
                   <Text style={styles.orderDate}>{formatDate(order.createdAt)}</Text>
                   <Text style={styles.orderTotalSmall}>
-                    Total: Rp {order.totalAmount.toLocaleString()}
+                    {`Total: Rp ${order.totalAmount.toLocaleString()}`}
                   </Text>
                   
                   {/* Show Midtrans Order ID if available */}
                   {order.midtransOrderId && (
                     <Text style={styles.orderIdText}>
-                      ID: {order.midtransOrderId}
+                      {`ID: ${order.midtransOrderId}`}
                     </Text>
                   )}
                 </View>
@@ -477,18 +592,22 @@ const UserOrders = ({ route }) => {
                       styles.paymentStatusBadge, 
                       { backgroundColor: getPaymentStatusColor(order.paymentStatus || 'pending') }
                     ]}>
-                      <Ionicons 
-                        name={
-                          ['paid', 'capture', 'settlement'].includes(order.paymentStatus) 
-                            ? 'checkmark-circle' 
-                            : order.paymentStatus === 'pending' 
-                              ? 'time' 
-                              : 'close-circle'
-                        } 
-                        size={12} 
-                        color="#fff" 
-                        style={styles.paymentIcon}
-                      />
+                      {isCheckingPayment[order.id] ? (
+                        <Ionicons name="sync" size={12} color="#fff" style={[styles.paymentIcon, styles.spinning]} />
+                      ) : (
+                        <Ionicons 
+                          name={
+                            ['paid', 'capture', 'settlement'].includes(order.paymentStatus) 
+                              ? 'checkmark-circle' 
+                              : order.paymentStatus === 'pending' 
+                                ? 'time' 
+                                : 'close-circle'
+                          } 
+                          size={12} 
+                          color="#fff" 
+                          style={styles.paymentIcon}
+                        />
+                      )}
                       <Text style={styles.paymentStatusText}>
                         {getPaymentStatusText(order.paymentStatus || 'pending')}
                       </Text>
@@ -508,8 +627,8 @@ const UserOrders = ({ route }) => {
                   {order.items.map((item, index) => (
                     <View key={index} style={styles.orderItem}>
                       <Text style={styles.orderItemName}>{item.name}</Text>
-                      <Text style={styles.orderItemQty}>x{item.quantity}</Text>
-                      <Text style={styles.orderItemPrice}>Rp {item.price.toLocaleString()}</Text>
+                      <Text style={styles.orderItemQty}>{`x${item.quantity}`}</Text>
+                      <Text style={styles.orderItemPrice}>{`Rp ${item.price.toLocaleString()}`}</Text>
                     </View>
                   ))}
                   
@@ -534,7 +653,15 @@ const UserOrders = ({ route }) => {
                     {order.paymentToken && (
                       <View style={styles.paymentInfoRow}>
                         <Text style={styles.paymentInfoLabel}>Token:</Text>
-                        <Text style={styles.paymentInfoValue}>{order.paymentToken.substring(0, 20)}...</Text>
+                        <Text style={styles.paymentInfoValue}>{`${order.paymentToken.substring(0, 20)}...`}</Text>
+                      </View>
+                    )}
+                    {order.lastPaymentCheck && (
+                      <View style={styles.paymentInfoRow}>
+                        <Text style={styles.paymentInfoLabel}>Last Check:</Text>
+                        <Text style={styles.paymentInfoValue}>
+                          {formatDate(order.lastPaymentCheck.toDate ? order.lastPaymentCheck.toDate() : new Date(order.lastPaymentCheck))}
+                        </Text>
                       </View>
                     )}
                   </View>
@@ -549,7 +676,7 @@ const UserOrders = ({ route }) => {
                   <View style={styles.orderTotal}>
                     <Text style={styles.orderTotalLabel}>Total:</Text>
                     <Text style={styles.orderTotalAmount}>
-                      Rp {order.totalAmount.toLocaleString()}
+                      {`Rp ${order.totalAmount.toLocaleString()}`}
                     </Text>
                   </View>
                   
@@ -595,7 +722,7 @@ const UserOrders = ({ route }) => {
                     )}
                     
                     {/* Show payment failed message */}
-                    {['failed', 'deny', 'cancel', 'expire'].includes(order.paymentStatus) && (
+                    {['failed', 'failure', 'deny', 'cancel', 'expire'].includes(order.paymentStatus) && (
                       <View style={styles.paymentFailedContainer}>
                         <Ionicons name="close-circle" size={20} color="#F44336" />
                         <Text style={styles.paymentFailedText}>
@@ -605,13 +732,28 @@ const UserOrders = ({ route }) => {
                     )}
 
                     {/* Manual Payment Status Check Button */}
-                    {order.midtransOrderId && ['pending', 'failed'].includes(order.paymentStatus || 'pending') && (
+                    {order.midtransOrderId && (
                       <TouchableOpacity
-                        style={[styles.actionButton, styles.checkPaymentButton]}
-                        onPress={() => updatePaymentStatus(order.id, order.kantin, order.midtransOrderId)}
+                        style={[
+                          styles.actionButton, 
+                          styles.checkPaymentButton,
+                          isCheckingPayment[order.id] && styles.checkPaymentButtonDisabled
+                        ]}
+                        onPress={() => checkAndUpdatePaymentStatus(order.id, order.kantin, order.midtransOrderId, true)}
+                        disabled={isCheckingPayment[order.id]}
                       >
-                        <Ionicons name="refresh" size={16} color="#fff" style={styles.refreshIcon} />
-                        <Text style={styles.actionButtonText}>Cek Status Bayar</Text>
+                        <Ionicons 
+                          name={isCheckingPayment[order.id] ? "sync" : "refresh"} 
+                          size={16} 
+                          color="#fff" 
+                          style={[
+                            styles.refreshIcon,
+                            isCheckingPayment[order.id] && styles.spinning
+                          ]} 
+                        />
+                        <Text style={styles.actionButtonText}>
+                          {isCheckingPayment[order.id] ? 'Checking...' : 'Cek Status Bayar'}
+                        </Text>
                       </TouchableOpacity>
                     )}
                   </View>
@@ -655,6 +797,9 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.2,
     shadowRadius: 4,
+  },
+  deleteAllButtonDisabled: {
+    backgroundColor: '#ccc',
   },
   deleteAllButtonDisabled: {
     backgroundColor: '#ccc',

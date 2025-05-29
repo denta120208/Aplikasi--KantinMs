@@ -22,7 +22,8 @@ import {
   query, 
   where, 
   getDocs, 
-  updateDoc 
+  updateDoc,
+  doc // Added this import
 } from 'firebase/firestore';
 
 const OrderForm = ({ route, navigation }) => {
@@ -52,6 +53,7 @@ const OrderForm = ({ route, navigation }) => {
   const [showPayment, setShowPayment] = useState(false);
   const [paymentUrl, setPaymentUrl] = useState('');
   const [orderId, setOrderId] = useState('');
+  const [firebaseOrderId, setFirebaseOrderId] = useState(''); // Added this state
 
   // FIXED: Get kantin info - REMOVE DEFAULT VALUE
   let kantin = food.canteen || food.kantin;
@@ -116,6 +118,7 @@ const OrderForm = ({ route, navigation }) => {
       });
       
       const result = await response.json();
+      console.log('Payment status from Midtrans:', result); // Added debug log
       
       if (result.transaction_status) {
         return {
@@ -132,9 +135,11 @@ const OrderForm = ({ route, navigation }) => {
     }
   };
 
-  // Function to update payment status in Firebase
+  // FIXED: Function to update payment status in Firebase
   const updatePaymentStatusInFirebase = async (midtransOrderId, paymentStatus) => {
     try {
+      console.log('Updating payment status for order:', midtransOrderId, 'to:', paymentStatus);
+      
       // Update di koleksi kantin-specific
       const kantinCollectionName = `orders_kantin_${kantin.toLowerCase()}`;
       const kantinQuery = query(
@@ -143,9 +148,15 @@ const OrderForm = ({ route, navigation }) => {
       );
       const kantinSnapshot = await getDocs(kantinQuery);
       
-      kantinSnapshot.docs.forEach(async (doc) => {
-        await updateDoc(doc.ref, { paymentStatus });
-      });
+      let updateCount = 0;
+      for (const docSnapshot of kantinSnapshot.docs) {
+        await updateDoc(docSnapshot.ref, { 
+          paymentStatus,
+          status: paymentStatus === 'paid' ? 'confirmed' : 'pending' // Also update order status
+        });
+        updateCount++;
+        console.log(`✅ Updated kantin order ${docSnapshot.id} with payment status: ${paymentStatus}`);
+      }
       
       // Update di general orders collection
       const generalQuery = query(
@@ -154,13 +165,20 @@ const OrderForm = ({ route, navigation }) => {
       );
       const generalSnapshot = await getDocs(generalQuery);
       
-      generalSnapshot.docs.forEach(async (doc) => {
-        await updateDoc(doc.ref, { paymentStatus });
-      });
+      for (const docSnapshot of generalSnapshot.docs) {
+        await updateDoc(docSnapshot.ref, { 
+          paymentStatus,
+          status: paymentStatus === 'paid' ? 'confirmed' : 'pending' // Also update order status
+        });
+        updateCount++;
+        console.log(`✅ Updated general order ${docSnapshot.id} with payment status: ${paymentStatus}`);
+      }
       
-      console.log('✅ Payment status updated successfully');
+      console.log(`✅ Payment status updated successfully for ${updateCount} documents`);
+      return updateCount > 0;
     } catch (error) {
       console.error('❌ Error updating payment status:', error);
+      return false;
     }
   };
 
@@ -281,11 +299,12 @@ const OrderForm = ({ route, navigation }) => {
         try {
           const docRef = await addDoc(collection(db, kantinCollectionName), orderData);
           console.log(`✅ Order successfully added to ${kantinCollectionName} with ID:`, docRef.id);
+          setFirebaseOrderId(docRef.id); // Store Firebase order ID
           
           // Also store in general orders collection
           try {
-            await addDoc(collection(db, 'orders'), { ...orderData, firebaseOrderId: docRef.id });
-            console.log('✅ Order also added to general orders collection');
+            const generalDocRef = await addDoc(collection(db, 'orders'), { ...orderData, firebaseOrderId: docRef.id });
+            console.log('✅ Order also added to general orders collection with ID:', generalDocRef.id);
           } catch (generalError) {
             console.log('⚠️ General orders collection update failed, but kantin-specific order saved successfully');
           }
@@ -354,33 +373,99 @@ const OrderForm = ({ route, navigation }) => {
     );
   };
 
-  // Handle WebView navigation state changes (only for mobile)
-  const handleNavigationStateChange = (navState) => {
+  // FIXED: Handle WebView navigation state changes (only for mobile)
+  const handleNavigationStateChange = async (navState) => {
     console.log('Navigation state:', navState.url);
     
-    // Check for payment completion URLs
-    if (navState.url.includes('payment-success') || navState.url.includes('transaction_status=capture')) {
-      handlePaymentSuccess();
-    } else if (navState.url.includes('payment-error') || navState.url.includes('transaction_status=deny')) {
+    // Check for payment completion URLs - improved detection
+    if (navState.url.includes('payment-success') || 
+        navState.url.includes('transaction_status=capture') ||
+        navState.url.includes('transaction_status=settlement') ||
+        navState.url.includes('/finish') ||
+        navState.url.includes('status_code=200')) {
+      
+      // Add delay to ensure Midtrans has processed the payment
+      setTimeout(() => {
+        handlePaymentSuccess();
+      }, 2000);
+      
+    } else if (navState.url.includes('payment-error') || 
+               navState.url.includes('transaction_status=deny') ||
+               navState.url.includes('transaction_status=cancel') ||
+               navState.url.includes('/error')) {
       handlePaymentError();
-    } else if (navState.url.includes('payment-pending') || navState.url.includes('transaction_status=pending')) {
+    } else if (navState.url.includes('payment-pending') || 
+               navState.url.includes('transaction_status=pending') ||
+               navState.url.includes('/unfinish')) {
       handlePaymentPending();
     }
   };
 
-  // Updated handlePaymentSuccess function with payment status checking
+  // FIXED: Updated handlePaymentSuccess function with better retry logic
   const handlePaymentSuccess = async () => {
     try {
-      // Check actual payment status from Midtrans
-      const paymentStatus = await checkPaymentStatus(orderId);
+      console.log('Processing payment success for order:', orderId);
+      
+      // Retry mechanism for checking payment status
+      let paymentStatus = null;
+      let retryCount = 0;
+      const maxRetries = 3;
+      
+      while (!paymentStatus && retryCount < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, 1000 * (retryCount + 1))); // Progressive delay
+        paymentStatus = await checkPaymentStatus(orderId);
+        retryCount++;
+        console.log(`Payment status check attempt ${retryCount}:`, paymentStatus);
+      }
       
       if (paymentStatus && ['capture', 'settlement'].includes(paymentStatus.status)) {
         // Update Firebase dengan status pembayaran yang tepat
-        await updatePaymentStatusInFirebase(orderId, 'paid');
+        const updateSuccess = await updatePaymentStatusInFirebase(orderId, 'paid');
+        
+        if (updateSuccess) {
+          Alert.alert(
+            'Pembayaran Berhasil!',
+            `Pembayaran untuk pesanan ${orderId} telah berhasil. Pesanan Anda sedang diproses.`,
+            [
+              { 
+                text: 'Lihat Pesanan', 
+                onPress: () => {
+                  setShowPayment(false);
+                  navigation.navigate('UserOrdersScreen');
+                }
+              },
+              { 
+                text: 'OK', 
+                onPress: () => {
+                  setShowPayment(false);
+                  navigation.goBack();
+                }
+              }
+            ]
+          );
+        } else {
+          // If Firebase update failed, but payment was successful
+          Alert.alert(
+            'Pembayaran Berhasil!',
+            'Pembayaran berhasil, namun ada masalah sinkronisasi data. Status akan diperbarui dalam beberapa saat.',
+            [
+              { 
+                text: 'OK', 
+                onPress: () => {
+                  setShowPayment(false);
+                  navigation.navigate('UserOrdersScreen');
+                }
+              }
+            ]
+          );
+        }
+      } else {
+        // If status is still not confirmed, update Firebase anyway and let user know
+        await updatePaymentStatusInFirebase(orderId, 'processing');
         
         Alert.alert(
-          'Pembayaran Berhasil!',
-          `Pembayaran untuk pesanan ${orderId} telah berhasil. Pesanan Anda sedang diproses.`,
+          'Pembayaran Diproses',
+          'Pembayaran Anda sedang diverifikasi. Status akan diperbarui dalam beberapa menit.',
           [
             { 
               text: 'Lihat Pesanan', 
@@ -398,16 +483,20 @@ const OrderForm = ({ route, navigation }) => {
             }
           ]
         );
-      } else {
-        // Payment not confirmed yet, treat as pending
-        handlePaymentPending();
       }
     } catch (error) {
-      console.error('Error updating payment status:', error);
-      // Fallback to showing success message even if status check fails
+      console.error('Error in handlePaymentSuccess:', error);
+      
+      // Fallback: Update status to processing and show success message
+      try {
+        await updatePaymentStatusInFirebase(orderId, 'processing');
+      } catch (updateError) {
+        console.error('Failed to update payment status as fallback:', updateError);
+      }
+      
       Alert.alert(
         'Pembayaran Berhasil!',
-        `Pembayaran untuk pesanan ${orderId} telah berhasil. Pesanan Anda sedang diproses.`,
+        `Pembayaran untuk pesanan ${orderId} telah berhasil. Status akan diperbarui dalam beberapa saat.`,
         [
           { 
             text: 'Lihat Pesanan', 
@@ -448,7 +537,10 @@ const OrderForm = ({ route, navigation }) => {
     );
   };
 
-  const handlePaymentPending = () => {
+  const handlePaymentPending = async () => {
+    // Update status to pending in Firebase
+    await updatePaymentStatusInFirebase(orderId, 'pending');
+    
     Alert.alert(
       'Pembayaran Tertunda',
       'Pembayaran Anda sedang diproses. Kami akan memberitahu Anda setelah pembayaran dikonfirmasi.',
