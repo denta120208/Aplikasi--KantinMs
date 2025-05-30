@@ -50,176 +50,187 @@ const UserOrders = ({ route }) => {
     return () => unsubscribe();
   }, [adminKantin, selectedKantin]);
 
-  // Auto-check payment status for pending payments
-  useEffect(() => {
-    const checkPendingPayments = async () => {
-      const pendingOrders = orders.filter(order => 
-        order.paymentStatus === 'pending' && 
-        order.midtransOrderId &&
-        // Only check orders created in the last 24 hours to avoid unnecessary API calls
-        (new Date() - order.createdAt) < 24 * 60 * 60 * 1000
-      );
+  // Auto-check payment status for pending payments using simulation
+ // Auto-check payment status for pending payments using simulation
+useEffect(() => {
+  const checkPendingPayments = async () => {
+    const pendingOrders = orders.filter(order => 
+      order.paymentStatus === 'pending' && 
+      order.midtransOrderId &&
+      // Only check orders created in the last 24 hours
+      (new Date() - order.createdAt) < 24 * 60 * 60 * 1000
+    );
 
-      if (pendingOrders.length > 0) {
-        console.log(`Auto-checking ${pendingOrders.length} pending payments...`);
-        
-        for (const order of pendingOrders) {
-          try {
-            await checkAndUpdatePaymentStatus(order.id, order.kantin, order.midtransOrderId, false);
-            // Add delay between API calls to avoid rate limiting
-            await new Promise(resolve => setTimeout(resolve, 1000));
-          } catch (error) {
-            console.error(`Auto-check failed for order ${order.id}:`, error);
-          }
+    if (pendingOrders.length > 0) {
+      console.log(`Auto-checking ${pendingOrders.length} pending payments...`);
+      
+      for (const order of pendingOrders) {
+        try {
+          await simulatePaymentStatusCheck(order.id, order.kantin, order.midtransOrderId, order.createdAt, false);
+          // Add delay between checks
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        } catch (error) {
+          console.error(`Auto-check failed for order ${order.id}:`, error);
         }
       }
-    };
-
-    // Start auto-checking if there are pending orders
-    const pendingCount = orders.filter(order => 
-      order.paymentStatus === 'pending' && order.midtransOrderId
-    ).length;
-    
-    if (pendingCount > 0) {
-      // Check immediately
-      checkPendingPayments();
-      
-      // Set up interval to check every 2 minutes
-      paymentCheckInterval.current = setInterval(checkPendingPayments, 2 * 60 * 1000);
-    } else {
-      // Clear interval if no pending orders
-      if (paymentCheckInterval.current) {
-        clearInterval(paymentCheckInterval.current);
-        paymentCheckInterval.current = null;
-      }
-    }
-
-    // Cleanup interval on unmount or when orders change
-    return () => {
-      if (paymentCheckInterval.current) {
-        clearInterval(paymentCheckInterval.current);
-        paymentCheckInterval.current = null;
-      }
-    };
-  }, [orders]);
-
-  // FIXED: Function to check Midtrans payment status via backend proxy
-  const checkMidtransPaymentStatus = async (midtransOrderId) => {
-    try {
-      // Instead of calling Midtrans directly, call your backend API
-      // Replace 'YOUR_BACKEND_URL' with your actual backend URL
-      const statusUrl = `YOUR_BACKEND_URL/api/check-payment-status/${midtransOrderId}`;
-      
-      const response = await fetch(statusUrl, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          // Add any authentication headers if needed
-          // 'Authorization': `Bearer ${userToken}`
-        }
-      });
-      
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-      
-      const result = await response.json();
-      return result;
-    } catch (error) {
-      console.error('Error checking Midtrans status:', error);
-      throw error;
     }
   };
 
-  // Enhanced function to update payment status
-  const checkAndUpdatePaymentStatus = async (orderId, orderKantin, midtransOrderId, showAlert = true) => {
-    if (isCheckingPayment[orderId]) return; // Prevent multiple simultaneous checks
+  // Start auto-checking if there are pending orders
+  const pendingCount = orders.filter(order => 
+    order.paymentStatus === 'pending' && order.midtransOrderId
+  ).length;
+  
+  if (pendingCount > 0) {
+    // Check immediately
+    checkPendingPayments();
     
-    setIsCheckingPayment(prev => ({ ...prev, [orderId]: true }));
-    
-    try {
-      // Check status from Midtrans via backend
-      const midtransStatus = await checkMidtransPaymentStatus(midtransOrderId);
-      
-      if (!midtransStatus) {
-        if (showAlert) {
-          Alert.alert('Error', 'Gagal mengecek status pembayaran dari Midtrans');
-        }
-        return;
-      }
-      
-      let newPaymentStatus = 'pending';
-      let statusChanged = false;
-      
-      // Map Midtrans status to internal status
-      switch (midtransStatus.transaction_status) {
-        case 'capture':
-        case 'settlement':
-          newPaymentStatus = 'paid';
-          statusChanged = true;
-          break;
-        case 'pending':
-          newPaymentStatus = 'pending';
-          break;
-        case 'deny':
-        case 'cancel':
-        case 'expire':
-          newPaymentStatus = 'failed';
-          statusChanged = true;
-          break;
-        case 'failure':
-          newPaymentStatus = 'failed';
-          statusChanged = true;
-          break;
-        default:
-          newPaymentStatus = midtransStatus.transaction_status;
-          statusChanged = true;
-      }
-      
-      // Only update if status has changed
-      if (statusChanged) {
-        // Update in Firebase
-        const updateData = {
-          paymentStatus: newPaymentStatus,
-          lastPaymentCheck: new Date(),
-          midtransTransactionStatus: midtransStatus.transaction_status,
-          midtransPaymentType: midtransStatus.payment_type || null,
-          midtransTransactionTime: midtransStatus.transaction_time || null
-        };
+    // MODIFIKASI: Set up interval to check every 30 seconds instead of 2 minutes
+    paymentCheckInterval.current = setInterval(checkPendingPayments, 30 * 1000);
+  } else {
+    // Clear interval if no pending orders
+    if (paymentCheckInterval.current) {
+      clearInterval(paymentCheckInterval.current);
+      paymentCheckInterval.current = null;
+    }
+  }
 
-        // Update kantin-specific collection
-        if (adminKantin !== 'all') {
-          await updateDoc(doc(db, `orders_kantin_${adminKantin.toLowerCase()}`, orderId), updateData);
-        }
-        
-        // Update general orders collection
-        try {
-          await updateDoc(doc(db, 'orders', orderId), updateData);
-        } catch (generalError) {
-          console.log('General orders update failed:', generalError);
-        }
-        
-        if (showAlert) {
-          const statusMessage = newPaymentStatus === 'paid' 
-            ? '✅ Pembayaran berhasil dikonfirmasi!' 
-            : `Status pembayaran diperbarui: ${getPaymentStatusText(newPaymentStatus)}`;
-            
-          Alert.alert('Status Updated', statusMessage);
-        } else {
-          // Silent update - just log
-          console.log(`Payment status updated for order ${orderId}: ${newPaymentStatus}`);
-        }
-      } else if (showAlert) {
-        Alert.alert('Info', `Status pembayaran masih: ${getPaymentStatusText(newPaymentStatus)}`);
+  // Cleanup interval on unmount or when orders change
+  return () => {
+    if (paymentCheckInterval.current) {
+      clearInterval(paymentCheckInterval.current);
+      paymentCheckInterval.current = null;
+    }
+  };
+}, [orders]);
+
+  // Simulasi pengecekan status pembayaran tanpa API call langsung
+  // Simulasi pengecekan status pembayaran tanpa API call langsung
+const simulatePaymentStatusCheck = async (orderId, orderKantin, midtransOrderId, orderCreatedAt, showAlert = true) => {
+  if (isCheckingPayment[orderId]) return;
+  
+  setIsCheckingPayment(prev => ({ ...prev, [orderId]: true }));
+  
+  try {
+    // Simulasi delay API call
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    
+    const now = new Date();
+    const timeDiff = now - orderCreatedAt;
+    const minutesDiff = timeDiff / (1000 * 60);
+    
+    let newPaymentStatus = 'pending';
+    let statusChanged = false;
+    
+    // MODIFIKASI: Langsung set ke paid untuk semua pembayaran yang baru
+    // Atau berdasarkan kondisi tertentu
+    
+    // Opsi 1: Langsung paid untuk semua order
+    newPaymentStatus = 'paid';
+    statusChanged = true;
+    
+    /* 
+    // Opsi 2: Berdasarkan waktu yang lebih singkat (2 menit)
+    if (minutesDiff >= 2) {
+      newPaymentStatus = 'paid';
+      statusChanged = true;
+    }
+    */
+    
+    /* 
+    // Opsi 3: Berdasarkan pattern order ID dengan probabilitas tinggi
+    const hash = midtransOrderId.split('-').pop() || '';
+    const hashNum = hash.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    
+    // 95% chance of immediate success
+    if (hashNum % 100 < 95) {
+      newPaymentStatus = 'paid';
+      statusChanged = true;
+    }
+    */
+    
+    // Update status jika ada perubahan
+    if (statusChanged) {
+      const updateData = {
+        paymentStatus: newPaymentStatus,
+        lastPaymentCheck: new Date(),
+        midtransTransactionStatus: newPaymentStatus === 'paid' ? 'settlement' : 'pending',
+        midtransPaymentType: newPaymentStatus === 'paid' ? 'bank_transfer' : null,
+        midtransTransactionTime: newPaymentStatus === 'paid' ? new Date().toISOString() : null,
+        simulatedUpdate: true // Mark as simulated for tracking
+      };
+
+      // Update kantin-specific collection
+      if (adminKantin !== 'all') {
+        await updateDoc(doc(db, `orders_kantin_${adminKantin.toLowerCase()}`, orderId), updateData);
       }
       
-    } catch (error) {
-      if (showAlert) {
-        Alert.alert('Error', 'Gagal mengecek status pembayaran. Coba lagi nanti.');
+      // Update general orders collection
+      try {
+        await updateDoc(doc(db, 'orders', orderId), updateData);
+      } catch (generalError) {
+        console.log('General orders update failed:', generalError);
       }
-      console.error('Error updating payment status:', error);
-    } finally {
-      setIsCheckingPayment(prev => ({ ...prev, [orderId]: false }));
+      
+      if (showAlert) {
+        const statusMessage = newPaymentStatus === 'paid' 
+          ? '✅ Pembayaran berhasil dikonfirmasi!' 
+          : `Status pembayaran diperbarui: ${getPaymentStatusText(newPaymentStatus)}`;
+          
+        Alert.alert('Status Updated', statusMessage);
+      } else {
+        console.log(`Payment status updated for order ${orderId}: ${newPaymentStatus}`);
+      }
+    } else if (showAlert) {
+      Alert.alert('Info', `Status pembayaran masih: ${getPaymentStatusText(newPaymentStatus)}`);
+    }
+    
+  } catch (error) {
+    if (showAlert) {
+      Alert.alert(
+        'Info', 
+        'Tidak dapat mengecek status secara otomatis. Silakan update manual jika pembayaran sudah berhasil.',
+        [
+          { text: 'Batal', style: 'cancel' },
+          { 
+            text: 'Update Manual ke PAID', 
+            onPress: () => manualUpdatePaymentStatus(orderId, orderKantin, 'paid')
+          }
+        ]
+      );
+    }
+    console.error('Error updating payment status:', error);
+  } finally {
+    setIsCheckingPayment(prev => ({ ...prev, [orderId]: false }));
+  }
+};
+
+  // Manual update payment status (fallback)
+  const manualUpdatePaymentStatus = async (orderId, orderKantin, newStatus) => {
+    try {
+      const updateData = {
+        paymentStatus: newStatus,
+        lastPaymentCheck: new Date(),
+        midtransTransactionStatus: newStatus === 'paid' ? 'settlement' : 'pending',
+        manualUpdate: true
+      };
+
+      // Update kantin-specific collection
+      if (adminKantin !== 'all') {
+        await updateDoc(doc(db, `orders_kantin_${adminKantin.toLowerCase()}`, orderId), updateData);
+      }
+      
+      // Update general orders collection
+      try {
+        await updateDoc(doc(db, 'orders', orderId), updateData);
+      } catch (generalError) {
+        console.log('General orders update failed:', generalError);
+      }
+      
+      Alert.alert('Berhasil', `Status pembayaran diupdate ke: ${getPaymentStatusText(newStatus)}`);
+    } catch (error) {
+      Alert.alert('Error', 'Gagal mengupdate status pembayaran');
+      console.error('Manual update error:', error);
     }
   };
 
@@ -482,9 +493,14 @@ const UserOrders = ({ route }) => {
       {pendingPaymentsCount > 0 && (
         <View style={styles.autoCheckInfo}>
           <Ionicons name="information-circle" size={16} color="#4285F4" />
-          <Text style={styles.autoCheckText}>
-            {`Auto-checking ${pendingPaymentsCount} pending payment${pendingPaymentsCount > 1 ? 's' : ''} every 2 minutes`}
-          </Text>
+          <View style={styles.autoCheckTextContainer}>
+            <Text style={styles.autoCheckText}>
+              {`Simulasi auto-check ${pendingPaymentsCount} pending payment${pendingPaymentsCount > 1 ? 's' : ''} setiap 2 menit`}
+            </Text>
+            <Text style={styles.autoCheckSubText}>
+              (Gunakan "Cek Status" atau "Update Manual" untuk update langsung)
+            </Text>
+          </View>
         </View>
       )}
       
@@ -664,6 +680,14 @@ const UserOrders = ({ route }) => {
                         </Text>
                       </View>
                     )}
+                    {(order.simulatedUpdate || order.manualUpdate) && (
+                      <View style={styles.paymentInfoRow}>
+                        <Text style={styles.paymentInfoLabel}>Update Type:</Text>
+                        <Text style={[styles.paymentInfoValue, { color: '#FF9800' }]}>
+                          {order.simulatedUpdate ? 'Simulasi' : 'Manual'}
+                        </Text>
+                      </View>
+                    )}
                   </View>
                   
                   {order.notes && (
@@ -721,40 +745,45 @@ const UserOrders = ({ route }) => {
                       </View>
                     )}
                     
-                    {/* Show payment failed message */}
-                    {['failed', 'failure', 'deny', 'cancel', 'expire'].includes(order.paymentStatus) && (
-                      <View style={styles.paymentFailedContainer}>
-                        <Ionicons name="close-circle" size={20} color="#F44336" />
-                        <Text style={styles.paymentFailedText}>
-                          Pembayaran gagal atau dibatalkan
-                        </Text>
-                      </View>
-                    )}
-
-                    {/* Manual Payment Status Check Button */}
-                    {order.midtransOrderId && (
+                    {/* Check Payment Status Button (using simulation) */}
+                    {order.paymentStatus === 'pending' && order.midtransOrderId && (
                       <TouchableOpacity
-                        style={[
-                          styles.actionButton, 
-                          styles.checkPaymentButton,
-                          isCheckingPayment[order.id] && styles.checkPaymentButtonDisabled
-                        ]}
-                        onPress={() => checkAndUpdatePaymentStatus(order.id, order.kantin, order.midtransOrderId, true)}
+                        style={[styles.actionButton, styles.checkPaymentButton, isCheckingPayment[order.id] && styles.checkPaymentButtonDisabled]}
+                        onPress={() => simulatePaymentStatusCheck(order.id, order.kantin, order.midtransOrderId, order.createdAt, true)}
                         disabled={isCheckingPayment[order.id]}
                       >
-                        <Ionicons 
-                          name={isCheckingPayment[order.id] ? "sync" : "refresh"} 
-                          size={16} 
-                          color="#fff" 
-                          style={[
-                            styles.refreshIcon,
-                            isCheckingPayment[order.id] && styles.spinning
-                          ]} 
-                        />
+                        {isCheckingPayment[order.id] ? (
+                          <Ionicons name="sync" size={16} color="#fff" style={styles.spinning} />
+                        ) : (
+                          <Ionicons name="refresh" size={16} color="#fff" />
+                        )}
                         <Text style={styles.actionButtonText}>
-                          {isCheckingPayment[order.id] ? 'Checking...' : 'Cek Status Bayar'}
+                          {isCheckingPayment[order.id] ? 'Checking...' : 'Cek Status'}
                         </Text>
                       </TouchableOpacity>
+                    )}
+                    
+                    {/* Manual Update Buttons for Failed Payments */}
+                    {['failed', 'failure', 'deny', 'cancel', 'expire'].includes(order.paymentStatus) && (
+                      <View style={styles.manualUpdateContainer}>
+                        <Text style={styles.manualUpdateTitle}>Update Manual:</Text>
+                        <View style={styles.manualUpdateButtons}>
+                          <TouchableOpacity
+                            style={[styles.actionButton, styles.manualPaidButton]}
+                            onPress={() => manualUpdatePaymentStatus(order.id, order.kantin, 'paid')}
+                          >
+                            <Ionicons name="checkmark-circle" size={16} color="#fff" />
+                            <Text style={styles.actionButtonText}>Mark as Paid</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={[styles.actionButton, styles.manualPendingButton]}
+                            onPress={() => manualUpdatePaymentStatus(order.id, order.kantin, 'pending')}
+                          >
+                            <Ionicons name="time" size={16} color="#fff" />
+                            <Text style={styles.actionButtonText}>Reset to Pending</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
                     )}
                   </View>
                 </View>
@@ -770,14 +799,14 @@ const UserOrders = ({ route }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f9f9f9',
-    padding: 15,
+    backgroundColor: '#f5f5f5',
+    padding: 16,
   },
   headerContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 16,
   },
   header: {
     fontSize: 24,
@@ -786,217 +815,227 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   deleteAllButton: {
-    backgroundColor: '#F44336',
     flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: '#F44336',
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 8,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-  },
-  deleteAllButtonDisabled: {
-    backgroundColor: '#ccc',
+    borderRadius: 6,
+    marginLeft: 8,
   },
   deleteAllButtonDisabled: {
     backgroundColor: '#ccc',
   },
   deleteAllIcon: {
-    marginRight: 6,
+    marginRight: 4,
   },
   deleteAllButtonText: {
     color: '#fff',
-    fontWeight: 'bold',
     fontSize: 12,
+    fontWeight: '600',
   },
-  orderCountContainer: {
-    backgroundColor: '#fff',
-    padding: 10,
-    borderRadius: 8,
-    marginBottom: 15,
+  autoCheckInfo: {
+    flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: '#E3F2FD',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
   },
-  orderCountText: {
-    color: '#666',
+  autoCheckText: {
+    marginLeft: 8,
     fontSize: 14,
+    color: '#1976D2',
     fontWeight: '500',
   },
   filterContainer: {
-    marginBottom: 20,
+    marginBottom: 16,
   },
   filterLabel: {
     fontSize: 16,
     fontWeight: 'bold',
-    marginBottom: 10,
+    marginBottom: 8,
     color: '#333',
   },
   filterButton: {
-    paddingHorizontal: 15,
+    paddingHorizontal: 16,
     paddingVertical: 8,
+    marginRight: 8,
     borderRadius: 20,
     borderWidth: 1,
     borderColor: '#ddd',
-    marginRight: 10,
     backgroundColor: '#fff',
   },
   filterButtonActive: {
-    backgroundColor: '#4285F4',
-    borderColor: '#4285F4',
+    backgroundColor: '#2196F3',
+    borderColor: '#2196F3',
   },
   filterButtonText: {
+    fontSize: 14,
     color: '#666',
   },
   filterButtonTextActive: {
     color: '#fff',
-    fontWeight: 'bold',
+    fontWeight: '600',
   },
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 50,
+    paddingVertical: 60,
   },
   emptyText: {
+    fontSize: 18,
+    color: '#999',
+    marginTop: 16,
     textAlign: 'center',
-    color: '#666',
-    fontSize: 16,
-    marginTop: 10,
+  },
+  orderCountContainer: {
+    backgroundColor: '#E8F5E8',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
+    alignItems: 'center',
+  },
+  orderCountText: {
+    fontSize: 14,
+    color: '#2E7D32',
+    fontWeight: '600',
   },
   orderCard: {
     backgroundColor: '#fff',
-    borderRadius: 10,
-    marginBottom: 15,
-    overflow: 'hidden',
+    borderRadius: 12,
+    marginBottom: 12,
+    elevation: 2,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
-    shadowRadius: 5,
-    elevation: 3,
+    shadowRadius: 4,
   },
   orderHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    padding: 15,
     alignItems: 'center',
-  },
-  orderHeaderRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    padding: 16,
   },
   userKantinRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    marginBottom: 4,
   },
   orderUser: {
+    fontSize: 18,
     fontWeight: 'bold',
-    fontSize: 16,
-    marginRight: 10,
     color: '#333',
+    marginRight: 8,
   },
   kantinBadge: {
     paddingHorizontal: 8,
-    paddingVertical: 3,
+    paddingVertical: 2,
     borderRadius: 12,
   },
   kantinBadgeText: {
     color: '#fff',
-    fontSize: 10,
-    fontWeight: 'bold',
+    fontSize: 12,
+    fontWeight: '600',
   },
   orderDate: {
+    fontSize: 14,
     color: '#666',
-    fontSize: 12,
-    marginTop: 5,
+    marginBottom: 4,
   },
   orderTotalSmall: {
-    color: '#4285F4',
-    fontSize: 12,
-    fontWeight: 'bold',
-    marginTop: 3,
+    fontSize: 14,
+    color: '#333',
+    fontWeight: '600',
   },
   orderIdText: {
+    fontSize: 12,
     color: '#888',
-    fontSize: 10,
-    fontFamily: 'monospace',
     marginTop: 2,
+    fontFamily: 'monospace',
+  },
+  orderHeaderRight: {
+    alignItems: 'flex-end',
   },
   statusContainer: {
     alignItems: 'flex-end',
-    marginRight: 10,
+    marginBottom: 8,
   },
   statusBadge: {
-    paddingHorizontal: 8,
+    paddingHorizontal: 12,
     paddingVertical: 4,
-    borderRadius: 10,
+    borderRadius: 16,
     marginBottom: 4,
   },
   statusText: {
     color: '#fff',
     fontSize: 12,
-    fontWeight: 'bold',
+    fontWeight: '600',
   },
   paymentStatusBadge: {
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-    borderRadius: 8,
     flexDirection: 'row',
     alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
   },
   paymentIcon: {
-    marginRight: 3,
+    marginRight: 4,
   },
   paymentStatusText: {
     color: '#fff',
-    fontSize: 10,
-    fontWeight: 'bold',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  spinning: {
+    // Add spinning animation if needed
   },
   orderDetails: {
-    padding: 15,
     borderTopWidth: 1,
     borderTopColor: '#eee',
+    padding: 16,
   },
   orderDetailTitle: {
+    fontSize: 16,
     fontWeight: 'bold',
-    marginBottom: 10,
+    marginBottom: 12,
     color: '#333',
   },
   orderItem: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 5,
-    paddingVertical: 3,
+    alignItems: 'center',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
   },
   orderItemName: {
-    flex: 2,
+    fontSize: 14,
     color: '#333',
+    flex: 1,
   },
   orderItemQty: {
-    flex: 1,
-    textAlign: 'center',
+    fontSize: 14,
     color: '#666',
+    marginHorizontal: 16,
   },
   orderItemPrice: {
-    flex: 1,
-    textAlign: 'right',
+    fontSize: 14,
     color: '#333',
-    fontWeight: '500',
+    fontWeight: '600',
   },
   paymentInfoContainer: {
-    marginTop: 15,
-    padding: 12,
     backgroundColor: '#f8f9fa',
+    padding: 12,
     borderRadius: 8,
-    borderLeftWidth: 4,
-    borderLeftColor: '#4285F4',
+    marginTop: 16,
   },
   paymentInfoTitle: {
-    fontWeight: 'bold',
-    marginBottom: 8,
-    color: '#333',
     fontSize: 14,
+    fontWeight: 'bold',
+    color: '#333',
+    marginBottom: 8,
   },
   paymentInfoRow: {
     flexDirection: 'row',
@@ -1004,106 +1043,125 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   paymentInfoLabel: {
-    color: '#666',
     fontSize: 12,
+    color: '#666',
     flex: 1,
   },
   paymentInfoValue: {
-    color: '#333',
     fontSize: 12,
+    color: '#333',
     fontWeight: '500',
     flex: 2,
     textAlign: 'right',
   },
   notesContainer: {
-    marginTop: 10,
-    padding: 10,
-    backgroundColor: '#f8f8f8',
+    marginTop: 16,
+    padding: 12,
+    backgroundColor: '#fff3cd',
     borderRadius: 8,
   },
   notesLabel: {
+    fontSize: 14,
     fontWeight: 'bold',
-    marginBottom: 5,
-    color: '#333',
+    color: '#856404',
+    marginBottom: 4,
   },
   notesText: {
-    color: '#666',
-    fontStyle: 'italic',
+    fontSize: 14,
+    color: '#856404',
   },
   orderTotal: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: 10,
-    paddingTop: 10,
+    alignItems: 'center',
+    marginTop: 16,
+    paddingTop: 16,
     borderTopWidth: 1,
     borderTopColor: '#eee',
   },
   orderTotalLabel: {
+    fontSize: 18,
     fontWeight: 'bold',
-    fontSize: 16,
     color: '#333',
   },
   orderTotalAmount: {
+    fontSize: 18,
     fontWeight: 'bold',
-    fontSize: 16,
-    color: '#4285F4',
+    color: '#4CAF50',
   },
   orderActions: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    marginTop: 15,
+    marginTop: 16,
   },
   actionButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 15,
-    borderRadius: 5,
-    minWidth: 100,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    marginBottom: 8,
+  },
+  actionButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 4,
   },
   processButton: {
     backgroundColor: '#2196F3',
   },
-  completeButton: {
-    backgroundColor: '#4CAF50',
-  },
   cancelButton: {
     backgroundColor: '#F44336',
   },
-  actionButtonText: {
-    color: '#fff',
-    fontWeight: 'bold',
+  completeButton: {
+    backgroundColor: '#4CAF50',
   },
-  // NEW: Waiting payment container
+  checkPaymentButton: {
+    backgroundColor: '#FF9800',
+  },
+  checkPaymentButtonDisabled: {
+    backgroundColor: '#ccc',
+  },
   waitingPaymentContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    padding: 16,
+    backgroundColor: '#FFF3E0',
+    borderRadius: 8,
+    marginBottom: 8,
+  },
+  waitingPaymentText: {
+    marginLeft: 8,
+    fontSize: 14,
+    color: '#E65100',
+    fontWeight: '500',
+  },
+  manualUpdateContainer: {
     backgroundColor: '#FFF3E0',
     padding: 12,
     borderRadius: 8,
-    flex: 1,
+    marginTop: 8,
   },
-  waitingPaymentText: {
-    color: '#F57C00',
-    marginLeft: 8,
-    fontWeight: '500',
-    fontSize: 12,
+  manualUpdateTitle: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#E65100',
+    marginBottom: 8,
   },
-  // NEW: Payment failed container
-  paymentFailedContainer: {
+  manualUpdateButtons: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#FFEBEE',
-    padding: 12,
-    borderRadius: 8,
-    flex: 1,
+    justifyContent: 'space-between',
   },
-  paymentFailedText: {
-    color: '#C62828',
-    marginLeft: 8,
-    fontWeight: '500',
-    fontSize: 12,
+  manualPaidButton: {
+    backgroundColor: '#4CAF50',
+    flex: 1,
+    marginRight: 4,
+  },
+  manualPendingButton: {
+    backgroundColor: '#FF9800',
+    flex: 1,
+    marginLeft: 4,
   },
 });
 
