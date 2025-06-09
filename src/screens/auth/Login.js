@@ -8,16 +8,14 @@ import {
   Image,
   Alert,
   ActivityIndicator,
-  Platform,
 } from 'react-native';
 import { AuthContext } from '../../context/AuthContext';
 
-const Login = () => {
+const Login = ({ navigation }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
-  const { login, signInWithGoogle } = useContext(AuthContext);
+  const { login, loginWithGoogle } = useContext(AuthContext);
 
   const handleLogin = async () => {
     if (!email || !password) {
@@ -29,36 +27,34 @@ const Login = () => {
     try {
       await login(email, password);
     } catch (error) {
-      Alert.alert('Login gagal', error.message);
+      let errorMessage = 'Login gagal';
+      
+      if (error.code === 'auth/user-not-found') {
+        errorMessage = 'Email tidak ditemukan. Silakan daftar terlebih dahulu.';
+      } else if (error.code === 'auth/wrong-password') {
+        errorMessage = 'Password salah';
+      } else if (error.code === 'auth/invalid-email') {
+        errorMessage = 'Format email tidak valid';
+      } else if (error.code === 'auth/user-disabled') {
+        errorMessage = 'Akun telah dinonaktifkan';
+      } else if (error.code === 'auth/too-many-requests') {
+        errorMessage = 'Terlalu banyak percobaan login. Coba lagi nanti.';
+      }
+      
+      Alert.alert('Login gagal', errorMessage);
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleGoogleSignIn = async () => {
-    setIsGoogleLoading(true);
+  const handleGoogleLogin = async () => {
     try {
-      await signInWithGoogle();
+      setIsLoading(true);
+      await loginWithGoogle();
     } catch (error) {
-      console.log('Google sign in error:', error);
-      
-      // Handle different error types
-      if (error.code === 'auth/popup-closed-by-user') {
-        // User closed the popup - don't show error alert
-        return;
-      } else if (error.code === 'auth/popup-blocked') {
-        Alert.alert('Error', 'Popup diblokir browser. Silakan aktifkan popup untuk situs ini.');
-      } else if (error.code === 'auth/account-exists-with-different-credential') {
-        Alert.alert('Error', 'Akun sudah ada dengan metode login lain');
-      } else if (error.code === 'auth/invalid-credential') {
-        Alert.alert('Error', 'Kredensial tidak valid');
-      } else if (error.message.includes('not available')) {
-        Alert.alert('Error', 'Google Sign In tidak tersedia untuk platform ini');
-      } else {
-        Alert.alert('Login gagal', 'Gagal login dengan Google. Silakan coba lagi.');
-      }
+      Alert.alert('Login Google gagal', error.message);
     } finally {
-      setIsGoogleLoading(false);
+      setIsLoading(false);
     }
   };
 
@@ -92,7 +88,6 @@ const Login = () => {
           onChangeText={setPassword}
           placeholderTextColor="#888"
         />
-        
         <TouchableOpacity
           style={[styles.loginButton, isLoading && { backgroundColor: '#7baaf7' }]}
           onPress={handleLogin}
@@ -105,34 +100,35 @@ const Login = () => {
           )}
         </TouchableOpacity>
 
-        <View style={styles.dividerContainer}>
-          <View style={styles.divider} />
-          <Text style={styles.dividerText}>atau</Text>
-          <View style={styles.divider} />
-        </View>
-
         <TouchableOpacity
-          style={[styles.googleButton, isGoogleLoading && { backgroundColor: '#f0f0f0' }]}
-          onPress={handleGoogleSignIn}
-          disabled={isGoogleLoading}
+          style={styles.googleButton}
+          onPress={handleGoogleLogin}
+          disabled={isLoading}
         >
-          {isGoogleLoading ? (
-            <ActivityIndicator color="#666" />
+          {isLoading ? (
+            <ActivityIndicator color="#000" />
           ) : (
-            <>
-              <Image
-                source={{
-                  uri: 'https://developers.google.com/identity/images/g-logo.png'
-                }}
-                style={styles.googleIcon}
-              />
-              <Text style={styles.googleButtonText}>Masuk dengan Google</Text>
-            </>
+            <Text style={styles.googleButtonText}>Login dengan Google</Text>
           )}
         </TouchableOpacity>
-        
-        <Text style={styles.subtitle}>Usn: User@gmail.com</Text>
-        <Text style={styles.subtitle}>Pw: 123456</Text>
+
+        <View style={styles.registerLinkContainer}>
+          <Text style={styles.registerLinkText}>
+            Belum punya akun?{' '}
+            <Text 
+              style={styles.registerLink}
+              onPress={() => navigation.navigate('Register')}
+            >
+              Daftar di sini
+            </Text>
+          </Text>
+        </View>
+
+        <View style={styles.demoContainer}>
+          <Text style={styles.demoTitle}>Demo Account:</Text>
+          <Text style={styles.demoText}>Email: User@gmail.com</Text>
+          <Text style={styles.demoText}>Password: 123456</Text>
+        </View>
       </View>
     </View>
   );
@@ -164,6 +160,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#666',
     marginTop: 4,
+    textAlign: 'center',
   },
   formContainer: {
     width: '100%',
@@ -184,59 +181,60 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     borderRadius: 12,
     alignItems: 'center',
-    shadowColor: '#4285F4',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
-    elevation: 5,
-    marginBottom: 20,
+    marginBottom: 12,
+    elevation: 3,
   },
   loginButtonText: {
     color: '#fff',
     fontWeight: '600',
     fontSize: 18,
   },
-  dividerContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginVertical: 20,
-  },
-  divider: {
-    flex: 1,
-    height: 1,
-    backgroundColor: '#ddd',
-  },
-  dividerText: {
-    marginHorizontal: 16,
-    color: '#666',
-    fontSize: 14,
-  },
   googleButton: {
-    backgroundColor: '#ffffff',
-    paddingVertical: 16,
-    paddingHorizontal: 20,
+    backgroundColor: '#fff',
+    borderColor: '#4285F4',
+    borderWidth: 1,
+    paddingVertical: 14,
     borderRadius: 12,
     alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#ddd',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-    marginBottom: 20,
-  },
-  googleIcon: {
-    width: 20,
-    height: 20,
-    marginRight: 12,
+    marginBottom: 16,
+    elevation: 2,
   },
   googleButtonText: {
-    color: '#333',
-    fontWeight: '500',
+    color: '#4285F4',
+    fontWeight: '600',
     fontSize: 16,
+  },
+  registerLinkContainer: {
+    alignItems: 'center',
+    marginTop: 16,
+    marginBottom: 20,
+  },
+  registerLinkText: {
+    fontSize: 16,
+    color: '#666',
+  },
+  registerLink: {
+    color: '#4285F4',
+    fontWeight: '600',
+  },
+  demoContainer: {
+    backgroundColor: '#fff',
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    alignItems: 'center',
+  },
+  demoTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 8,
+  },
+  demoText: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 2,
   },
 });
 

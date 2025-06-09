@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 // Screens
 import Login from '../screens/auth/Login';
+import Register from '../screens/auth/Register'; // Tambahkan import Register
 import AdminDashboard from '../screens/admin/Dashboard';
 import ManageFood from '../screens/admin/ManageFood';
 import UserOrders from '../screens/admin/UserOrders';
@@ -81,14 +82,28 @@ const AppNavigator = () => {
     <NavigationContainer>
       <Stack.Navigator>
         {!user ? (
-          <Stack.Screen name="Login" component={Login} options={{ headerShown: false }} />
+          // Auth Stack - ketika user belum login
+          <>
+            <Stack.Screen 
+              name="Login" 
+              component={Login} 
+              options={{ headerShown: false }} 
+            />
+            <Stack.Screen 
+              name="Register" 
+              component={Register} 
+              options={{ headerShown: false }} 
+            />
+          </>
         ) : user.role === 'admin' ? (
+          // Admin Stack
           <Stack.Screen 
             name="AdminArea" 
             component={AdminTabNavigator} 
             options={{ headerShown: false }}
           />
         ) : (
+          // User Stack
           <>
             <Stack.Screen 
               name="UserArea" 

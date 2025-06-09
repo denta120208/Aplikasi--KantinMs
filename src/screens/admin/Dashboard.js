@@ -151,35 +151,31 @@ const AdminDashboard = () => {
     <ScrollView style={styles.container}>
       <Text style={styles.header}>Dashboard Admin</Text>
       
-      <View style={styles.cardContainer}>
-        <TouchableOpacity onPress={handleNavigateToMenu}>
-          <Card containerStyle={styles.card}>
-            <Card.Title>Menu Makanan</Card.Title>
-            <Card.Divider />
-            <View style={styles.cardContent}>
-              <Text style={styles.cardText}>{stats.menuCount} Menu</Text>
+      {/* Stats Cards Container */}
+      <View style={styles.statsContainer}>
+        {/* Top Row - Menu and Orders */}
+        <View style={styles.topRow}>
+          <TouchableOpacity onPress={handleNavigateToMenu} style={styles.halfCard}>
+            <View style={styles.statCard}>
+              <Text style={styles.cardTitle}>Menu Makanan</Text>
+              <Text style={styles.cardNumber}>{stats.menuCount} Menu</Text>
             </View>
-          </Card>
-        </TouchableOpacity>
+          </TouchableOpacity>
+          
+          <TouchableOpacity onPress={handleNavigateToOrders} style={styles.halfCard}>
+            <View style={styles.statCard}>
+              <Text style={styles.cardTitle}>Pesanan hari ini</Text>
+              <Text style={styles.cardNumber}>{stats.todayOrdersCount} Pesanan</Text>
+            </View>
+          </TouchableOpacity>
+        </View>
         
-        <TouchableOpacity onPress={handleNavigateToOrders}>
-          <Card containerStyle={styles.card}>
-            <Card.Title>Pesanan Hari Ini</Card.Title>
-            <Card.Divider />
-            <View style={styles.cardContent}>
-              <Text style={styles.cardText}>{stats.todayOrdersCount} Pesanan</Text>
-            </View>
-          </Card>
-        </TouchableOpacity>
-        
-        <TouchableOpacity onPress={handleNavigateToUsers}>
-          <Card containerStyle={styles.card}>
-            <Card.Title>Total Pengguna</Card.Title>
-            <Card.Divider />
-            <View style={styles.cardContent}>
-              <Text style={styles.cardText}>{stats.userCount} Pengguna</Text>
-            </View>
-          </Card>
+        {/* Bottom Row - Users (Full width) */}
+        <TouchableOpacity onPress={handleNavigateToUsers} style={styles.fullCard}>
+          <View style={styles.statCard}>
+            <Text style={styles.cardTitle}>Total Pengguna</Text>
+            <Text style={styles.cardNumber}>{stats.userCount} Pengguna</Text>
+          </View>
         </TouchableOpacity>
       </View>
       
@@ -198,8 +194,6 @@ const AdminDashboard = () => {
             <Text style={styles.noOrdersText}>Belum ada pesanan terbaru</Text>
           </Card>
         )}
-        
-        
       </View>
     </ScrollView>
   );
@@ -227,107 +221,145 @@ const styles = StyleSheet.create({
     marginTop: 40,
     marginBottom: 20,
     textAlign: 'center',
+    color: '#333',
   },
-  cardContainer: {
-    padding: 10,
+  
+  // New Stats Container Styles
+  statsContainer: {
+    paddingHorizontal: 16,
+    marginBottom: 20,
   },
-  card: {
-    borderRadius: 10,
-    marginBottom: 10,
-    elevation: 3,
+  topRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 12,
   },
-  cardContent: {
+  halfCard: {
+    flex: 1,
+    marginHorizontal: 4,
+  },
+  fullCard: {
+    marginHorizontal: 4,
+  },
+  statCard: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 20,
     alignItems: 'center',
-    padding: 10,
+    justifyContent: 'center',
+    minHeight: 100,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 3.84,
+    elevation: 5,
   },
-  cardText: {
+  cardTitle: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  cardNumber: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#4285F4',
+    color: '#333',
+    textAlign: 'center',
   },
+  
+  // Recent Orders Styles
   recentOrdersContainer: {
-    padding: 10,
+    padding: 16,
     marginBottom: 20,
   },
   recentOrdersTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    marginBottom: 10,
-    marginLeft: 10,
+    marginBottom: 12,
+    color: '#333',
   },
   orderCard: {
-    borderRadius: 10,
-    marginBottom: 10,
-    padding: 12,
-    elevation: 2,
+    borderRadius: 12,
+    marginBottom: 12,
+    padding: 16,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 3.84,
   },
   orderHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 5,
+    alignItems: 'center',
+    marginBottom: 8,
   },
   orderTitle: {
     fontWeight: 'bold',
     fontSize: 16,
+    color: '#333',
   },
   orderTime: {
     color: '#666',
+    fontSize: 12,
   },
   orderDetails: {
-    marginVertical: 5,
+    marginVertical: 8,
   },
   customerName: {
-    marginBottom: 3,
+    marginBottom: 4,
+    color: '#666',
+    fontSize: 14,
   },
   orderItems: {
-    marginBottom: 3,
+    marginBottom: 4,
+    color: '#666',
+    fontSize: 14,
   },
   orderTotal: {
     fontWeight: 'bold',
+    color: '#333',
+    fontSize: 14,
   },
   orderStatusContainer: {
-    marginTop: 5,
+    marginTop: 8,
     alignItems: 'flex-end',
   },
   orderStatus: {
-    padding: 5,
-    borderRadius: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 12,
     fontSize: 12,
     fontWeight: 'bold',
+    overflow: 'hidden',
   },
   statusPending: {
-    backgroundColor: '#FFC107',
-    color: '#000',
+    backgroundColor: '#FFF3CD',
+    color: '#856404',
   },
   statusProcessing: {
-    backgroundColor: '#2196F3',
-    color: '#fff',
+    backgroundColor: '#CCE5FF',
+    color: '#004085',
   },
   statusCompleted: {
-    backgroundColor: '#4CAF50',
-    color: '#fff',
+    backgroundColor: '#D4EDDA',
+    color: '#155724',
   },
   noOrdersCard: {
-    borderRadius: 10,
+    borderRadius: 12,
     padding: 20,
     alignItems: 'center',
+    elevation: 2,
   },
   noOrdersText: {
     color: '#666',
     fontSize: 16,
   },
-  viewAllButton: {
-    backgroundColor: '#4285F4',
-    padding: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginTop: 10,
-    marginHorizontal: 10,
-  },
-  viewAllButtonText: {
-    color: '#fff',
-    fontWeight: 'bold',
-  },
 });
-
 export default AdminDashboard;

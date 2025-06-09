@@ -1,43 +1,37 @@
 import React, { createContext, useState, useEffect } from 'react';
+import { Platform } from 'react-native';
 import { auth, db } from '../config/firebaseConfig';
-import { 
-  onAuthStateChanged, 
-  signInWithEmailAndPassword, 
-  signOut, 
-  GoogleAuthProvider, 
+import {
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut,
+  GoogleAuthProvider,
+  signInWithCredential,
   signInWithPopup,
-  signInWithCredential 
 } from 'firebase/auth';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { Platform } from 'react-native';
+import * as AuthSession from 'expo-auth-session';
+import * as WebBrowser from 'expo-web-browser';
 
-// Import Google Sign In hanya untuk mobile platform
-let GoogleSignin = null;
-if (Platform.OS !== 'web') {
-  try {
-    GoogleSignin = require('@react-native-google-signin/google-signin').GoogleSignin;
-  } catch (error) {
-    console.log('Google Sign In not available for this platform');
-  }
-}
+// Configure WebBrowser for AuthSession
+WebBrowser.maybeCompleteAuthSession();
 
 export const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [isRegistering, setIsRegistering] = useState(false); // Flag untuk registrasi
 
   useEffect(() => {
-    // Configure Google Sign In hanya untuk mobile
-    if (GoogleSignin && Platform.OS !== 'web') {
-      GoogleSignin.configure({
-        webClientId: '914454433538-sk3j67hjvk9tf8v72nngi1lfnc4g58q0.apps.googleusercontent.com', // Dari Firebase Console
-      });
-    }
-
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      // Jika sedang dalam proses registrasi, jangan update user state
+      if (isRegistering) {
+        return;
+      }
+
       if (user) {
-        // Get user role from Firestore
         const docRef = doc(db, "users", user.uid);
         const docSnap = await getDoc(docRef);
         
@@ -45,24 +39,14 @@ export const AuthProvider = ({ children }) => {
           setUser({
             uid: user.uid,
             email: user.email,
-            displayName: user.displayName,
-            photoURL: user.photoURL,
             role: docSnap.data().role,
             ...docSnap.data()
           });
         } else {
-          // Create new user document for Google sign in users
-          const userData = {
+          setUser({
             uid: user.uid,
             email: user.email,
-            displayName: user.displayName,
-            photoURL: user.photoURL,
-            role: 'user', // Default role for new users
-            createdAt: new Date().toISOString(),
-          };
-          
-          await setDoc(docRef, userData);
-          setUser(userData);
+          });
         }
       } else {
         setUser(null);
@@ -71,7 +55,7 @@ export const AuthProvider = ({ children }) => {
     });
 
     return unsubscribe;
-  }, []);
+  }, [isRegistering]);
 
   const login = async (email, password) => {
     try {
@@ -82,43 +66,121 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const signInWithGoogle = async () => {
+  const register = async (email, password, userData = {}) => {
+    try {
+      setIsRegistering(true); // Set flag registrasi
+      
+      // Buat akun baru dengan email dan password
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
+
+      // Simpan data user tambahan ke Firestore
+      const userDoc = {
+        uid: user.uid,
+        email: user.email,
+        role: userData.role || 'user', // default role
+        name: userData.name || '',
+        createdAt: new Date().toISOString(),
+        ...userData
+      };
+
+      await setDoc(doc(db, 'users', user.uid), userDoc);
+      
+      // Logout setelah registrasi agar tidak otomatis login
+      await signOut(auth);
+      
+      return user;
+    } catch (error) {
+      throw error;
+    } finally {
+      setIsRegistering(false); // Reset flag registrasi
+    }
+  };
+
+  const loginWithGoogle = async () => {
     try {
       if (Platform.OS === 'web') {
-        // Web platform - menggunakan popup
+        // Untuk web, gunakan Firebase popup
         const provider = new GoogleAuthProvider();
         const result = await signInWithPopup(auth, provider);
-        return result.user;
-      } else {
-        // Mobile platform - menggunakan Google Sign In native
-        if (!GoogleSignin) {
-          throw new Error('Google Sign In tidak tersedia untuk platform ini');
+        
+        // Cek apakah user sudah ada di database
+        const docRef = doc(db, "users", result.user.uid);
+        const docSnap = await getDoc(docRef);
+        
+        if (!docSnap.exists()) {
+          // Jika user baru, simpan ke database
+          const userDoc = {
+            uid: result.user.uid,
+            email: result.user.email,
+            name: result.user.displayName || '',
+            role: 'user',
+            createdAt: new Date().toISOString(),
+          };
+          await setDoc(docRef, userDoc);
         }
         
-        // Check if your device supports Google Play
-        await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+        return result.user;
+      } else {
+        // Untuk native (Android/iOS), gunakan Expo AuthSession
+        const clientId = '914454433538-sk3j67hjvk9tf8v72nngi1lfnc4g58q0.apps.googleusercontent.com';
         
-        // Get the users ID token
-        const { idToken } = await GoogleSignin.signIn();
-        
-        // Create a Google credential with the token
-        const googleCredential = GoogleAuthProvider.credential(idToken);
-        
-        // Sign-in the user with the credential
-        const userCredential = await signInWithCredential(auth, googleCredential);
-        return userCredential.user;
+        const redirectUri = AuthSession.makeRedirectUri({
+          useProxy: true,
+        });
+
+        const request = new AuthSession.AuthRequest({
+          clientId: clientId,
+          scopes: ['openid', 'profile', 'email'],
+          redirectUri: redirectUri,
+          responseType: AuthSession.ResponseType.IdToken,
+          extraParams: {},
+          additionalParameters: {},
+        });
+
+        const result = await request.promptAsync({
+          authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
+        });
+
+        if (result.type === 'success') {
+          const { id_token } = result.params;
+          
+          // Create a Google credential with the token
+          const googleCredential = GoogleAuthProvider.credential(id_token);
+          
+          // Sign in the user with the credential
+          const userCredential = await signInWithCredential(auth, googleCredential);
+          
+          // Cek apakah user sudah ada di database
+          const docRef = doc(db, "users", userCredential.user.uid);
+          const docSnap = await getDoc(docRef);
+          
+          if (!docSnap.exists()) {
+            // Jika user baru, simpan ke database
+            const userDoc = {
+              uid: userCredential.user.uid,
+              email: userCredential.user.email,
+              name: userCredential.user.displayName || '',
+              role: 'user',
+              createdAt: new Date().toISOString(),
+            };
+            await setDoc(docRef, userDoc);
+          }
+          
+          return userCredential.user;
+        } else {
+          throw new Error('Google sign in was cancelled or failed');
+        }
       }
     } catch (error) {
+      console.log('Google Sign In Error:', error);
       throw error;
     }
   };
 
   const logout = async () => {
     try {
-      if (GoogleSignin && Platform.OS !== 'web') {
-        await GoogleSignin.signOut(); // Sign out from Google (mobile only)
-      }
-      await signOut(auth); // Sign out from Firebase
+      await signOut(auth);
       return true;
     } catch (error) {
       throw error;
@@ -130,7 +192,8 @@ export const AuthProvider = ({ children }) => {
       user, 
       loading, 
       login, 
-      signInWithGoogle, 
+      register, 
+      loginWithGoogle, 
       logout 
     }}>
       {children}
