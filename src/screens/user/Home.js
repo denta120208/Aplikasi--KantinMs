@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, ActivityIndicator, Dimensions } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { db } from '../../config/firebaseConfig';
@@ -12,6 +12,10 @@ const UserHome = () => {
   const [isLoading, setIsLoading] = useState(true);
   const navigation = useNavigation();
   const { user } = useContext(AuthContext);
+
+  // Get screen width for responsive image sizing
+  const screenWidth = Dimensions.get('window').width;
+  const cardWidth = screenWidth - 40; // Account for padding
 
   const canteens = [
     { label: 'Kantin A', value: 'A', icon: '🏪', color: '#4285F4' },
@@ -28,7 +32,6 @@ const UserHome = () => {
     setIsLoading(true);
     try {
       const foodsCollection = collection(db, 'foods');
-      // Removed orderBy to avoid index requirement
       const q = query(
         foodsCollection, 
         where('canteen', '==', selectedCanteen)
@@ -66,6 +69,55 @@ const UserHome = () => {
 
   const getCurrentCanteen = () => {
     return canteens.find(canteen => canteen.value === selectedCanteen);
+  };
+
+  // Calculate dynamic image height based on admin's cropped aspect ratio
+  const getFoodImageStyle = (food) => {
+    if (food.imageMetadata && food.imageMetadata.aspectRatio) {
+      // Use the exact aspect ratio from admin's crop
+      const height = cardWidth / food.imageMetadata.aspectRatio;
+      return {
+        width: '100%',
+        height: Math.max(120, Math.min(height, 300)), // Min 120, max 300 for better UX
+        borderRadius: 12,
+      };
+    }
+    // Fallback for legacy images without metadata
+    return {
+      width: '100%',
+      height: 200, // Default height
+      borderRadius: 12,
+    };
+  };
+
+  // Determine the best resize mode based on aspect ratio
+  const getResizeMode = (food) => {
+    if (food.imageMetadata && food.imageMetadata.aspectRatio) {
+      // Since admin already cropped the image to desired ratio, use 'cover' to fill nicely
+      return 'cover';
+    }
+    return 'cover'; // Default for legacy images
+  };
+
+  // Get image URI - handle both legacy and new format
+  const getImageUri = (food) => {
+    if (typeof food.imageData === 'string') {
+      return food.imageData;
+    } else if (food.imageData && food.imageData.uri) {
+      return food.imageData.uri;
+    }
+    return null;
+  };
+
+  // Calculate if image is landscape, portrait, or square for layout decisions
+  const getImageOrientation = (food) => {
+    if (food.imageMetadata && food.imageMetadata.aspectRatio) {
+      const ratio = food.imageMetadata.aspectRatio;
+      if (ratio > 1.3) return 'landscape';
+      if (ratio < 0.7) return 'portrait';
+      return 'square';
+    }
+    return 'unknown';
   };
 
   return (
@@ -136,65 +188,103 @@ const UserHome = () => {
       ) : (
         <View style={styles.menuContainer}>
           {foods.length > 0 ? (
-            foods.map((food) => (
-              <TouchableOpacity 
-                key={food.id} 
-                style={styles.foodCard}
-                onPress={() => handleOrderPress(food)}
-                activeOpacity={0.8}
-              >
-                <Image 
-                  source={{ uri: food.imageData }} 
-                  style={styles.foodImage}
-                />
-                <View style={styles.foodInfo}>
-                  <View style={styles.foodHeader}>
-                    <Text style={styles.foodName}>{food.name}</Text>
-                    <View style={[
-                      styles.canteenBadge,
-                      { backgroundColor: getCurrentCanteen()?.color }
-                    ]}>
-                      <Text style={styles.canteenBadgeText}>
-                        {getCurrentCanteen()?.icon} Kantin {food.canteen}
-                      </Text>
+            foods.map((food) => {
+              const imageUri = getImageUri(food);
+              const imageOrientation = getImageOrientation(food);
+              
+              return (
+                <TouchableOpacity 
+                  key={food.id} 
+                  style={[
+                    styles.foodCard,
+                    // Add extra spacing for portrait images
+                    imageOrientation === 'portrait' && styles.portraitCard
+                  ]}
+                  onPress={() => handleOrderPress(food)}
+                  activeOpacity={0.8}
+                >
+                  <View style={[
+                    styles.imageContainer,
+                    getFoodImageStyle(food)
+                  ]}>
+                    {imageUri ? (
+                      <Image 
+                        source={{ uri: imageUri }} 
+                        style={styles.foodImage}
+                        resizeMode={getResizeMode(food)}
+                        onError={(error) => {
+                          console.log('Image load error:', error.nativeEvent.error);
+                        }}
+                      />
+                    ) : (
+                      <View style={styles.noImageContainer}>
+                        <Ionicons name="image-outline" size={50} color="#ccc" />
+                        <Text style={styles.noImageText}>No Image</Text>
+                      </View>
+                    )}
+                    
+                    {/* Gradient overlay for better text readability */}
+                    <View style={styles.imageOverlay} />
+                    <View style={styles.imageContent}>
+                      <View style={[
+                        styles.canteenBadge,
+                        { backgroundColor: getCurrentCanteen()?.color }
+                      ]}>
+                        <Text style={styles.canteenBadgeText}>
+                          {getCurrentCanteen()?.icon} Kantin {food.canteen}
+                        </Text>
+                      </View>
+                      
+                      {/* Show image ratio info for debugging if needed */}
+                      {food.imageMetadata && __DEV__ && (
+                        <View style={styles.debugInfo}>
+                          <Text style={styles.debugText}>
+                            {Math.round(food.imageMetadata.aspectRatio * 100) / 100} • {imageOrientation}
+                          </Text>
+                        </View>
+                      )}
                     </View>
                   </View>
-                  <Text style={[
-                    styles.foodPrice,
-                    { color: getCurrentCanteen()?.color }
-                  ]}>
-                    Rp {food.price.toLocaleString()}
-                  </Text>
-                  <Text style={styles.foodDescription} numberOfLines={2}>
-                    {food.description}
-                  </Text>
-                  <TouchableOpacity 
-                    style={[
-                      styles.orderButton,
-                      { backgroundColor: getCurrentCanteen()?.color }
-                    ]}
-                    onPress={() => handleOrderPress(food)}
-                  >
-                    <Ionicons name="bag-add-outline" size={16} color="#fff" />
-                    <Text style={styles.orderButtonText}>Pesan Sekarang</Text>
-                  </TouchableOpacity>
-                </View>
-              </TouchableOpacity>
-            ))
+                  
+                  <View style={styles.foodInfo}>
+                    <View style={styles.foodHeader}>
+                      <Text style={styles.foodName}>{food.name}</Text>
+                      <Text style={[
+                        styles.foodPrice,
+                        { color: getCurrentCanteen()?.color }
+                      ]}>
+                        Rp {food.price?.toLocaleString() || '0'}
+                      </Text>
+                    </View>
+                    
+                    <Text style={styles.foodDescription} numberOfLines={2}>
+                      {food.description}
+                    </Text>
+                    
+                    <View style={styles.orderButtonContainer}>
+                      <TouchableOpacity
+                        style={[
+                          styles.orderButton,
+                          { backgroundColor: getCurrentCanteen()?.color }
+                        ]}
+                        onPress={() => handleOrderPress(food)}
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons name="add-circle-outline" size={20} color="#fff" />
+                        <Text style={styles.orderButtonText}>Pesan Sekarang</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              );
+            })
           ) : (
             <View style={styles.emptyContainer}>
               <Text style={styles.emptyIcon}>🍽️</Text>
-              <Text style={styles.emptyTitle}>Menu Kosong</Text>
-              <Text style={styles.emptyText}>
+              <Text style={styles.emptyTitle}>Menu Belum Tersedia</Text>
+              <Text style={styles.emptyDescription}>
                 Belum ada menu makanan di {getCurrentCanteen()?.label}
               </Text>
-              <TouchableOpacity 
-                style={styles.refreshButton}
-                onPress={fetchFoods}
-              >
-                <Ionicons name="refresh-outline" size={20} color="#666" />
-                <Text style={styles.refreshButtonText}>Refresh</Text>
-              </TouchableOpacity>
             </View>
           )}
         </View>
@@ -206,67 +296,65 @@ const UserHome = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f4f6fc',
+    backgroundColor: '#f8f9fa',
   },
   header: {
-    backgroundColor: '#4285F4',
-    paddingVertical: 40,
-    paddingHorizontal: 20,
+    padding: 20,
+    paddingTop: 60,
+    backgroundColor: '#fff',
     borderBottomLeftRadius: 25,
     borderBottomRightRadius: 25,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 5,
   },
   greeting: {
-    fontSize: 26,
-    fontWeight: '600',
-    color: '#fff',
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#2c3e50',
+    marginBottom: 5,
   },
   subGreeting: {
     fontSize: 16,
-    color: '#e0e0e0',
-    marginTop: 4,
+    color: '#7f8c8d',
   },
   canteenSection: {
-    paddingVertical: 20,
-    backgroundColor: '#fff',
-    marginTop: -15,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    zIndex: 1,
+    padding: 20,
   },
   canteenTitle: {
     fontSize: 18,
-    fontWeight: '600',
+    fontWeight: 'bold',
+    color: '#2c3e50',
     marginBottom: 15,
-    paddingHorizontal: 20,
-    color: '#333',
   },
   canteenContainer: {
-    paddingHorizontal: 15,
+    paddingRight: 20,
   },
   canteenCard: {
     backgroundColor: '#fff',
     borderRadius: 15,
     padding: 15,
-    marginHorizontal: 5,
-    minWidth: 90,
-    alignItems: 'center',
+    marginRight: 15,
     borderWidth: 2,
-    borderColor: '#e0e0e0',
+    borderColor: '#e9ecef',
+    alignItems: 'center',
+    minWidth: 100,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 3,
-    position: 'relative',
   },
   canteenIcon: {
     fontSize: 24,
     marginBottom: 8,
   },
   canteenLabel: {
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: '600',
-    color: '#333',
+    color: '#2c3e50',
     textAlign: 'center',
   },
   selectedCanteenLabel: {
@@ -276,150 +364,187 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: -5,
     right: -5,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderRadius: 12,
   },
   currentCanteenHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     padding: 20,
     marginHorizontal: 20,
-    marginTop: 15,
     borderRadius: 15,
+    marginBottom: 20,
   },
   currentCanteenIcon: {
-    fontSize: 32,
+    fontSize: 30,
     marginRight: 15,
   },
   currentCanteenTitle: {
     fontSize: 20,
-    fontWeight: '600',
-    color: '#333',
+    fontWeight: 'bold',
+    color: '#2c3e50',
   },
   currentCanteenSubtitle: {
     fontSize: 14,
-    color: '#666',
+    color: '#7f8c8d',
     marginTop: 2,
   },
   loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
     padding: 50,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   loadingText: {
     marginTop: 15,
-    color: '#666',
     fontSize: 16,
+    color: '#7f8c8d',
   },
   menuContainer: {
     paddingHorizontal: 20,
-    paddingTop: 10,
+    paddingBottom: 20,
   },
   foodCard: {
     backgroundColor: '#fff',
-    borderRadius: 15,
+    borderRadius: 20,
     marginBottom: 20,
-    overflow: 'hidden',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
-    elevation: 4,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    elevation: 6,
+    overflow: 'hidden',
+  },
+  portraitCard: {
+    marginBottom: 25, // Extra spacing for portrait images
+  },
+  imageContainer: {
+    position: 'relative',
+    overflow: 'hidden',
   },
   foodImage: {
     width: '100%',
-    height: 180,
-    borderTopLeftRadius: 15,
-    borderTopRightRadius: 15,
+    height: '100%',
+  },
+  noImageContainer: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#f8f9fa',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  noImageText: {
+    color: '#ccc',
+    fontSize: 16,
+    marginTop: 8,
+  },
+  imageOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+  },
+  imageContent: {
+    position: 'absolute',
+    top: 15,
+    left: 15,
+    right: 15,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  canteenBadge: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  canteenBadgeText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  debugInfo: {
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+  },
+  debugText: {
+    color: '#fff',
+    fontSize: 10,
   },
   foodInfo: {
-    padding: 15,
+    padding: 20,
   },
   foodHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    marginBottom: 8,
+    marginBottom: 10,
   },
   foodName: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#333',
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#2c3e50',
     flex: 1,
     marginRight: 10,
   },
-  canteenBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 10,
-    alignSelf: 'flex-start',
-  },
-  canteenBadgeText: {
-    color: '#fff',
-    fontSize: 10,
-    fontWeight: '600',
-  },
   foodPrice: {
-    fontSize: 16,
-    marginVertical: 4,
-    fontWeight: '500',
+    fontSize: 18,
+    fontWeight: 'bold',
   },
   foodDescription: {
-    color: '#666',
     fontSize: 14,
+    color: '#7f8c8d',
     lineHeight: 20,
-    marginBottom: 12,
+    marginBottom: 15,
+  },
+  orderButtonContainer: {
+    alignItems: 'center',
   },
   orderButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    paddingHorizontal: 20,
     paddingVertical: 12,
-    borderRadius: 10,
-    marginTop: 5,
+    borderRadius: 25,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
   },
   orderButtonText: {
     color: '#fff',
-    fontSize: 14,
+    fontSize: 16,
     fontWeight: 'bold',
-    marginLeft: 6,
+    marginLeft: 8,
   },
   emptyContainer: {
-    padding: 40,
+    padding: 50,
     alignItems: 'center',
     backgroundColor: '#fff',
-    marginHorizontal: 20,
-    borderRadius: 15,
-    marginTop: 20,
+    borderRadius: 20,
+    margin: 20,
   },
   emptyIcon: {
-    fontSize: 48,
+    fontSize: 60,
     marginBottom: 15,
   },
   emptyTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 8,
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#2c3e50',
+    marginBottom: 10,
   },
-  emptyText: {
-    fontSize: 14,
-    color: '#666',
+  emptyDescription: {
+    fontSize: 16,
+    color: '#7f8c8d',
     textAlign: 'center',
-    lineHeight: 20,
-    marginBottom: 20,
-  },
-  refreshButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    backgroundColor: '#f0f0f0',
-    borderRadius: 20,
-  },
-  refreshButtonText: {
-    marginLeft: 8,
-    color: '#666',
-    fontSize: 14,
+    lineHeight: 22,
   },
 });
 

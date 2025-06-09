@@ -58,13 +58,23 @@ const ManageFood = () => {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
-        aspect: [4, 3],
-        quality: 0.5,
+        // Remove fixed aspect ratio to allow free cropping
+        // aspect: [4, 3], // Removed this line
+        quality: 0.8, // Increased quality for better image preservation
+        allowsMultipleSelection: false,
       });
 
       if (!result.canceled) {
-        const base64Image = await convertImageToBase64(result.assets[0].uri);
-        setImage(base64Image);
+        const selectedImage = result.assets[0];
+        const base64Image = await convertImageToBase64(selectedImage.uri);
+        
+        // Store both base64 and dimensions for flexible display
+        setImage({
+          uri: base64Image,
+          width: selectedImage.width,
+          height: selectedImage.height,
+          aspectRatio: selectedImage.width / selectedImage.height
+        });
       }
     } catch (error) {
       console.error('Error picking image:', error);
@@ -107,30 +117,43 @@ const ManageFood = () => {
     setIsLoading(true);
     try {
       let imageData = null;
+      let imageMetadata = null;
       
-      if (isEditing && !image.startsWith('data:')) {
+      if (isEditing && image && typeof image === 'string') {
+        // If editing and image is still a string (not changed)
         const food = foods.find(f => f.id === editId);
         imageData = food.imageData;
-      } else {
-        imageData = image;
+        imageMetadata = food.imageMetadata || null;
+      } else if (image && typeof image === 'object') {
+        // New image selected
+        imageData = image.uri;
+        imageMetadata = {
+          width: image.width,
+          height: image.height,
+          aspectRatio: image.aspectRatio
+        };
+      } else if (isEditing) {
+        // Editing but no new image
+        const food = foods.find(f => f.id === editId);
+        imageData = food.imageData;
+        imageMetadata = food.imageMetadata || null;
       }
 
+      const foodData = {
+        name,
+        price: Number(price),
+        description,
+        imageData,
+        imageMetadata, // Store image metadata for flexible display
+        canteen: selectedCanteen
+      };
+
       if (isEditing) {
-        await updateDoc(doc(db, 'foods', editId), {
-          name,
-          price: Number(price),
-          description,
-          imageData,
-          canteen: selectedCanteen
-        });
+        await updateDoc(doc(db, 'foods', editId), foodData);
         Alert.alert('Sukses', `Makanan berhasil diupdate untuk Kantin ${selectedCanteen}`);
       } else {
         await addDoc(collection(db, 'foods'), {
-          name,
-          price: Number(price),
-          description,
-          imageData,
-          canteen: selectedCanteen,
+          ...foodData,
           createdAt: new Date()
         });
         Alert.alert('Sukses', `Makanan berhasil ditambahkan ke Kantin ${selectedCanteen}`);
@@ -155,7 +178,14 @@ const ManageFood = () => {
     setName(food.name);
     setPrice(food.price.toString());
     setDescription(food.description);
-    setImage(food.imageData);
+    
+    // Handle both old format (string) and new format (object) images
+    if (typeof food.imageData === 'string') {
+      setImage(food.imageData);
+    } else {
+      setImage(food.imageData);
+    }
+    
     setSelectedCanteen(food.canteen);
     setIsEditing(true);
     setEditId(food.id);
@@ -229,6 +259,27 @@ const ManageFood = () => {
     setEditId(null);
   };
 
+  // Helper function to get image URI for display
+  const getImageUri = (imageData) => {
+    if (typeof imageData === 'object' && imageData.uri) {
+      return imageData.uri;
+    }
+    return imageData;
+  };
+
+  // Helper function to calculate dynamic height for food cards
+  const getFoodImageStyle = (food) => {
+    if (food.imageMetadata && food.imageMetadata.aspectRatio) {
+      const cardWidth = 100; // Fixed width for food card images
+      const height = cardWidth / food.imageMetadata.aspectRatio;
+      return {
+        width: cardWidth,
+        height: Math.max(80, Math.min(height, 120)), // Min 80, max 120
+      };
+    }
+    return styles.foodImage; // Default style
+  };
+
   return (
     <ScrollView style={styles.container}>
       <Text style={styles.header}>Kelola Menu Makanan</Text>
@@ -291,11 +342,16 @@ const ManageFood = () => {
               <Text style={styles.loadingText}>Memproses gambar...</Text>
             </View>
           ) : image ? (
-            <Image source={{ uri: image }} style={styles.previewImage} />
+            <Image 
+              source={{ uri: getImageUri(image) }} 
+              style={styles.previewImage}
+              resizeMode="contain" // Changed to contain to preserve aspect ratio
+            />
           ) : (
             <View style={styles.imagePickerContent}>
               <Ionicons name="image-outline" size={24} color="#666" />
               <Text style={styles.imagePickerText}>Pilih Gambar</Text>
+              <Text style={styles.imagePickerHint}>Crop sesuka hati Anda</Text>
             </View>
           )}
         </TouchableOpacity>
@@ -332,7 +388,7 @@ const ManageFood = () => {
             <View key={food.id} style={styles.foodCard}>
               <Image 
                 source={{ uri: food.imageData }} 
-                style={styles.foodImage} 
+                style={getFoodImageStyle(food)}
                 resizeMode="cover"
               />
               <View style={styles.foodInfo}>
@@ -444,7 +500,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f2f2f2',
     borderRadius: 10,
     marginBottom: 15,
-    height: 150,
+    height: 200, // Increased height for better preview
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
@@ -455,6 +511,13 @@ const styles = StyleSheet.create({
   imagePickerText: {
     marginTop: 8,
     color: '#666',
+    fontSize: 16,
+  },
+  imagePickerHint: {
+    marginTop: 4,
+    color: '#999',
+    fontSize: 12,
+    fontStyle: 'italic',
   },
   previewImage: {
     width: '100%',
@@ -514,6 +577,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 5,
     elevation: 3,
+    alignItems: 'stretch', // Allow flexible height
   },
   foodImage: {
     width: 100,
@@ -522,6 +586,7 @@ const styles = StyleSheet.create({
   foodInfo: {
     flex: 1,
     padding: 10,
+    justifyContent: 'space-between',
   },
   foodName: {
     fontSize: 16,
@@ -545,6 +610,7 @@ const styles = StyleSheet.create({
   foodDescription: {
     fontSize: 12,
     color: '#666',
+    flex: 1,
   },
   actionButtons: {
     flexDirection: 'row',
