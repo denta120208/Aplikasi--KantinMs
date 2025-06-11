@@ -8,7 +8,8 @@ import {
   ActivityIndicator, 
   FlatList,
   Animated,
-  Easing
+  Easing,
+  Alert
 } from 'react-native';
 import { Card } from 'react-native-elements';
 import { useNavigation } from '@react-navigation/native';
@@ -18,7 +19,6 @@ import {
   query, 
   orderBy, 
   onSnapshot, 
-  getDocs, 
   where, 
   Timestamp 
 } from 'firebase/firestore';
@@ -29,9 +29,16 @@ const AdminDashboard = () => {
   const [stats, setStats] = useState({
     menuCount: 0,
     todayOrdersCount: 0,
-    userCount: 0
+    totalOrdersCount: 0,
+    userCount: 0,
+    pendingOrdersCount: 0,
+    completedOrdersCount: 0
   });
   const [recentOrders, setRecentOrders] = useState([]);
+  const [lastUpdateTime, setLastUpdateTime] = useState(new Date());
+
+  // Real-time listeners refs
+  const unsubscribeRefs = useRef([]);
 
   // Animated Values
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -43,7 +50,10 @@ const AdminDashboard = () => {
   const numberCounters = useRef({
     menuCount: new Animated.Value(0),
     todayOrdersCount: new Animated.Value(0),
-    userCount: new Animated.Value(0)
+    totalOrdersCount: new Animated.Value(0),
+    userCount: new Animated.Value(0),
+    pendingOrdersCount: new Animated.Value(0),
+    completedOrdersCount: new Animated.Value(0)
   }).current;
 
   // Initialize card animations
@@ -61,66 +71,53 @@ const AdminDashboard = () => {
 
   // Animate numbers counting up
   const animateNumbers = (newStats) => {
-    // Animate menu count
-    Animated.timing(numberCounters.menuCount, {
-      toValue: newStats.menuCount,
-      duration: 1500,
-      easing: Easing.out(Easing.quad),
-      useNativeDriver: false,
-    }).start();
-
-    // Animate today orders count
-    Animated.timing(numberCounters.todayOrdersCount, {
-      toValue: newStats.todayOrdersCount,
-      duration: 1500,
-      easing: Easing.out(Easing.quad),
-      useNativeDriver: false,
-    }).start();
-
-    // Animate user count
-    Animated.timing(numberCounters.userCount, {
-      toValue: newStats.userCount,
-      duration: 1500,
-      easing: Easing.out(Easing.quad),
-      useNativeDriver: false,
-    }).start();
+    Object.keys(numberCounters).forEach(key => {
+      if (newStats[key] !== undefined) {
+        Animated.timing(numberCounters[key], {
+          toValue: newStats[key],
+          duration: 1500,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: false,
+        }).start();
+      }
+    });
   };
 
   // Animate cards entrance
   const animateCardsEntrance = () => {
-    const animations = cardAnimations.slice(0, 3).map((cardAnim, index) => {
+    const animations = cardAnimations.slice(0, 6).map((cardAnim, index) => {
       return Animated.parallel([
         Animated.timing(cardAnim.scale, {
           toValue: 1,
           duration: 600,
-          delay: index * 150,
+          delay: index * 100,
           easing: Easing.elastic(1.2),
           useNativeDriver: true,
         }),
         Animated.timing(cardAnim.opacity, {
           toValue: 1,
           duration: 400,
-          delay: index * 150,
+          delay: index * 100,
           useNativeDriver: true,
         }),
         Animated.timing(cardAnim.translateY, {
           toValue: 0,
           duration: 500,
-          delay: index * 150,
+          delay: index * 100,
           easing: Easing.out(Easing.back(1.2)),
           useNativeDriver: true,
         })
       ]);
     });
 
-    Animated.stagger(100, animations).start();
+    Animated.stagger(80, animations).start();
   };
 
   // Animate order cards
   const animateOrderCards = (orderCount) => {
-    initializeCardAnimations(orderCount + 3); // +3 for stat cards
+    initializeCardAnimations(orderCount + 6); // +6 for stat cards
     
-    const orderAnimations = cardAnimations.slice(3, 3 + orderCount).map((cardAnim, index) => {
+    const orderAnimations = cardAnimations.slice(6, 6 + orderCount).map((cardAnim, index) => {
       // Reset values
       cardAnim.scale.setValue(0);
       cardAnim.opacity.setValue(0);
@@ -130,27 +127,27 @@ const AdminDashboard = () => {
         Animated.timing(cardAnim.scale, {
           toValue: 1,
           duration: 400,
-          delay: index * 100,
+          delay: index * 80,
           easing: Easing.out(Easing.back(1.1)),
           useNativeDriver: true,
         }),
         Animated.timing(cardAnim.opacity, {
           toValue: 1,
           duration: 300,
-          delay: index * 100,
+          delay: index * 80,
           useNativeDriver: true,
         }),
         Animated.timing(cardAnim.translateY, {
           toValue: 0,
           duration: 400,
-          delay: index * 100,
+          delay: index * 80,
           easing: Easing.out(Easing.quad),
           useNativeDriver: true,
         })
       ]);
     });
 
-    Animated.stagger(50, orderAnimations).start();
+    Animated.stagger(40, orderAnimations).start();
   };
 
   // Pulse animation for loading
@@ -211,9 +208,123 @@ const AdminDashboard = () => {
     });
   };
 
+  // Setup real-time listeners
+  const setupRealTimeListeners = () => {
+    // Clear existing listeners
+    unsubscribeRefs.current.forEach(unsubscribe => unsubscribe());
+    unsubscribeRefs.current = [];
+
+    try {
+      // 1. Real-time listener for ORDERS
+      const ordersRef = collection(db, 'orders');
+      const ordersQuery = query(ordersRef, orderBy('createdAt', 'desc'));
+      
+      const unsubscribeOrders = onSnapshot(ordersQuery, (snapshot) => {
+        console.log('🔄 Orders updated - Count:', snapshot.docs.length);
+        
+        const allOrders = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data(),
+          createdAt: doc.data().createdAt ? doc.data().createdAt.toDate() : new Date()
+        }));
+        
+        setRecentOrders(allOrders);
+        
+        // Calculate order statistics
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        
+        const todaysOrders = allOrders.filter(order => {
+          const orderDate = order.createdAt;
+          return orderDate >= today;
+        });
+        
+        const pendingOrders = allOrders.filter(order => order.status === 'pending');
+        const completedOrders = allOrders.filter(order => order.status === 'completed');
+        
+        setStats(prevStats => {
+          const newStats = {
+            ...prevStats,
+            todayOrdersCount: todaysOrders.length,
+            totalOrdersCount: allOrders.length,
+            pendingOrdersCount: pendingOrders.length,
+            completedOrdersCount: completedOrders.length
+          };
+          animateNumbers(newStats);
+          setLastUpdateTime(new Date());
+          return newStats;
+        });
+        
+        // Animate order cards
+        setTimeout(() => {
+          animateOrderCards(Math.min(allOrders.length, 5));
+        }, 500);
+      }, (error) => {
+        console.error("❌ Error in orders listener:", error);
+        Alert.alert('Error', 'Gagal memuat data pesanan real-time');
+      });
+      
+      unsubscribeRefs.current.push(unsubscribeOrders);
+
+      // 2. Real-time listener for MENU (FOODS)
+      const foodsRef = collection(db, 'foods');
+      const foodsQuery = query(foodsRef, orderBy('name', 'asc'));
+      
+      const unsubscribeFoods = onSnapshot(foodsQuery, (snapshot) => {
+        console.log('🔄 Menu updated - Count:', snapshot.docs.length);
+        
+        setStats(prevStats => {
+          const newStats = {
+            ...prevStats,
+            menuCount: snapshot.docs.length
+          };
+          animateNumbers(newStats);
+          setLastUpdateTime(new Date());
+          return newStats;
+        });
+      }, (error) => {
+        console.error("❌ Error in foods listener:", error);
+        Alert.alert('Error', 'Gagal memuat data menu real-time');
+      });
+      
+      unsubscribeRefs.current.push(unsubscribeFoods);
+
+      // 3. Real-time listener for USERS
+      const usersRef = collection(db, 'users');
+      const usersQuery = query(usersRef, orderBy('createdAt', 'desc'));
+      
+      const unsubscribeUsers = onSnapshot(usersQuery, (snapshot) => {
+        console.log('🔄 Users updated - Count:', snapshot.docs.length);
+        
+        setStats(prevStats => {
+          const newStats = {
+            ...prevStats,
+            userCount: snapshot.docs.length
+          };
+          animateNumbers(newStats);
+          setLastUpdateTime(new Date());
+          return newStats;
+        });
+      }, (error) => {
+        console.error("❌ Error in users listener:", error);
+        Alert.alert('Error', 'Gagal memuat data user real-time');
+      });
+      
+      unsubscribeRefs.current.push(unsubscribeUsers);
+
+      console.log('✅ All real-time listeners setup successfully');
+      setLoading(false);
+
+    } catch (error) {
+      console.error("❌ Error setting up real-time listeners:", error);
+      Alert.alert('Error', 'Gagal mengatur monitoring real-time');
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     // Initialize card animations
-    initializeCardAnimations(8); // 3 stat cards + 5 order cards
+    initializeCardAnimations(12); // 6 stat cards + 6 order cards
     
     // Start loading animations
     if (loading) {
@@ -221,53 +332,18 @@ const AdminDashboard = () => {
       startRotateAnimation();
     }
 
-    // Load initial statistics
-    fetchStatistics();
+    // Setup all real-time listeners
+    setupRealTimeListeners();
     
-    // Set up real-time listener for orders
-    const ordersRef = collection(db, 'orders');
-    const q = query(ordersRef, orderBy('createdAt', 'desc'));
-    
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const newOrders = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-        createdAt: doc.data().createdAt ? doc.data().createdAt.toDate() : new Date()
-      }));
-      
-      setRecentOrders(newOrders);
-      
-      // Update today's order count
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      
-      const todaysOrders = newOrders.filter(order => {
-        const orderDate = order.createdAt;
-        return orderDate >= today;
+    // Cleanup function
+    return () => {
+      console.log('🧹 Cleaning up real-time listeners');
+      unsubscribeRefs.current.forEach(unsubscribe => {
+        if (typeof unsubscribe === 'function') {
+          unsubscribe();
+        }
       });
-      
-      setStats(prevStats => {
-        const newStats = {
-          ...prevStats,
-          todayOrdersCount: todaysOrders.length
-        };
-        animateNumbers(newStats);
-        return newStats;
-      });
-      
-      setLoading(false);
-      
-      // Animate order cards
-      setTimeout(() => {
-        animateOrderCards(Math.min(newOrders.length, 5));
-      }, 1000);
-    }, (error) => {
-      console.error("Error getting real-time orders:", error);
-      setLoading(false);
-    });
-    
-    // Cleanup subscription
-    return () => unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
@@ -276,31 +352,7 @@ const AdminDashboard = () => {
     }
   }, [loading]);
 
-  const fetchStatistics = async () => {
-    try {
-      // Get menu count
-      const foodsCollection = collection(db, 'foods');
-      const foodsSnapshot = await getDocs(foodsCollection);
-      const menuCount = foodsSnapshot.docs.length;
-      
-      // Get user count
-      const usersCollection = collection(db, 'users');
-      const usersSnapshot = await getDocs(usersCollection);
-      const userCount = usersSnapshot.docs.length;
-      
-      const newStats = {
-        menuCount,
-        todayOrdersCount: 0, // This will be updated by the real-time listener
-        userCount
-      };
-      
-      setStats(newStats);
-      animateNumbers(newStats);
-    } catch (error) {
-      console.error("Error fetching statistics:", error);
-    }
-  };
-
+  // Navigation handlers
   const handleNavigateToOrders = () => {
     navigation.navigate('Orders');
   };
@@ -313,13 +365,26 @@ const AdminDashboard = () => {
     navigation.navigate('UserManagement');
   };
 
+  // Utility functions
   const formatTime = (date) => {
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
+  const formatLastUpdate = (date) => {
+    return date.toLocaleTimeString([], { 
+      hour: '2-digit', 
+      minute: '2-digit',
+      second: '2-digit'
+    });
+  };
+
   const renderOrderItem = ({ item, index }) => {
-    const cardIndex = index + 3; // Offset by 3 for stat cards
-    const cardAnimation = cardAnimations[cardIndex] || { scale: new Animated.Value(1), opacity: new Animated.Value(1), translateY: new Animated.Value(0) };
+    const cardIndex = index + 6; // Offset by 6 for stat cards
+    const cardAnimation = cardAnimations[cardIndex] || { 
+      scale: new Animated.Value(1), 
+      opacity: new Animated.Value(1), 
+      translateY: new Animated.Value(0) 
+    };
     
     return (
       <Animated.View
@@ -340,9 +405,11 @@ const AdminDashboard = () => {
           </View>
           
           <View style={styles.orderDetails}>
-            <Text style={styles.customerName}>Customer: {item.userName}</Text>
-            <Text style={styles.orderItems}>Items: {item.items.map(food => `${food.quantity}x ${food.name}`).join(', ')}</Text>
-            <Text style={styles.orderTotal}>Total: Rp {item.totalAmount?.toLocaleString()}</Text>
+            <Text style={styles.customerName}>Customer: {item.userName || 'Unknown'}</Text>
+            <Text style={styles.orderItems}>
+              Items: {item.items?.map(food => `${food.quantity}x ${food.name}`).join(', ') || 'No items'}
+            </Text>
+            <Text style={styles.orderTotal}>Total: Rp {item.totalAmount?.toLocaleString() || '0'}</Text>
           </View>
           
           <View style={styles.orderStatusContainer}>
@@ -352,7 +419,7 @@ const AdminDashboard = () => {
               item.status === 'processing' ? styles.statusProcessing : 
               styles.statusPending
             ]}>
-              {item.status.toUpperCase()}
+              {(item.status || 'pending').toUpperCase()}
             </Text>
           </View>
         </Card>
@@ -389,7 +456,7 @@ const AdminDashboard = () => {
             }
           ]}
         >
-          Memuat data...
+          Memuat dashboard real-time...
         </Animated.Text>
       </View>
     );
@@ -409,7 +476,19 @@ const AdminDashboard = () => {
           }
         ]}
       >
-        Dashboard Admin
+        Dashboard Admin (Real-time)
+      </Animated.Text>
+
+      {/* Last Update Time */}
+      <Animated.Text 
+        style={[
+          styles.lastUpdateText,
+          {
+            opacity: fadeAnim,
+          }
+        ]}
+      >
+        Terakhir diperbarui: {formatLastUpdate(lastUpdateTime)}
       </Animated.Text>
       
       {/* Stats Cards Container */}
@@ -422,12 +501,13 @@ const AdminDashboard = () => {
           }
         ]}
       >
-        {/* Top Row - Menu and Orders */}
+        {/* First Row - Menu and Today's Orders */}
         <View style={styles.topRow}>
           <TouchableOpacity onPress={handleNavigateToMenu} style={styles.halfCard}>
             <Animated.View 
               style={[
                 styles.statCard,
+                styles.menuCard,
                 {
                   transform: [
                     { scale: cardAnimations[0]?.scale || new Animated.Value(1) },
@@ -439,7 +519,7 @@ const AdminDashboard = () => {
             >
               <Text style={styles.cardTitle}>Menu Makanan</Text>
               <Animated.Text style={styles.cardNumber}>
-                {numberCounters.menuCount._value.toFixed(0)} Menu
+                {Math.round(numberCounters.menuCount._value)} Menu
               </Animated.Text>
             </Animated.View>
           </TouchableOpacity>
@@ -448,6 +528,7 @@ const AdminDashboard = () => {
             <Animated.View 
               style={[
                 styles.statCard,
+                styles.todayOrdersCard,
                 {
                   transform: [
                     { scale: cardAnimations[1]?.scale || new Animated.Value(1) },
@@ -457,34 +538,103 @@ const AdminDashboard = () => {
                 }
               ]}
             >
-              <Text style={styles.cardTitle}>Pesanan hari ini</Text>
+              <Text style={styles.cardTitle}>Pesanan Hari Ini</Text>
               <Animated.Text style={styles.cardNumber}>
-                {numberCounters.todayOrdersCount._value.toFixed(0)} Pesanan
+                {Math.round(numberCounters.todayOrdersCount._value)} Pesanan
               </Animated.Text>
             </Animated.View>
           </TouchableOpacity>
         </View>
         
-        {/* Bottom Row - Users (Full width) */}
-        <TouchableOpacity onPress={handleNavigateToUsers} style={styles.fullCard}>
-          <Animated.View 
-            style={[
-              styles.statCard,
-              {
-                transform: [
-                  { scale: cardAnimations[2]?.scale || new Animated.Value(1) },
-                  { translateY: cardAnimations[2]?.translateY || new Animated.Value(0) }
-                ],
-                opacity: cardAnimations[2]?.opacity || new Animated.Value(1)
-              }
-            ]}
-          >
-            <Text style={styles.cardTitle}>Total Pengguna</Text>
-            <Animated.Text style={styles.cardNumber}>
-              {numberCounters.userCount._value.toFixed(0)} Pengguna
-            </Animated.Text>
-          </Animated.View>
-        </TouchableOpacity>
+        {/* Second Row - Total Orders and Users */}
+        <View style={styles.topRow}>
+          <TouchableOpacity onPress={handleNavigateToOrders} style={styles.halfCard}>
+            <Animated.View 
+              style={[
+                styles.statCard,
+                styles.totalOrdersCard,
+                {
+                  transform: [
+                    { scale: cardAnimations[2]?.scale || new Animated.Value(1) },
+                    { translateY: cardAnimations[2]?.translateY || new Animated.Value(0) }
+                  ],
+                  opacity: cardAnimations[2]?.opacity || new Animated.Value(1)
+                }
+              ]}
+            >
+              <Text style={styles.cardTitle}>Total Pesanan</Text>
+              <Animated.Text style={styles.cardNumber}>
+                {Math.round(numberCounters.totalOrdersCount._value)} Pesanan
+              </Animated.Text>
+            </Animated.View>
+          </TouchableOpacity>
+          
+          <TouchableOpacity onPress={handleNavigateToUsers} style={styles.halfCard}>
+            <Animated.View 
+              style={[
+                styles.statCard,
+                styles.usersCard,
+                {
+                  transform: [
+                    { scale: cardAnimations[3]?.scale || new Animated.Value(1) },
+                    { translateY: cardAnimations[3]?.translateY || new Animated.Value(0) }
+                  ],
+                  opacity: cardAnimations[3]?.opacity || new Animated.Value(1)
+                }
+              ]}
+            >
+              <Text style={styles.cardTitle}>Total Pengguna</Text>
+              <Animated.Text style={styles.cardNumber}>
+                {Math.round(numberCounters.userCount._value)} Pengguna
+              </Animated.Text>
+            </Animated.View>
+          </TouchableOpacity>
+        </View>
+
+        {/* Third Row - Order Status */}
+        <View style={styles.topRow}>
+          <TouchableOpacity onPress={handleNavigateToOrders} style={styles.halfCard}>
+            <Animated.View 
+              style={[
+                styles.statCard,
+                styles.pendingCard,
+                {
+                  transform: [
+                    { scale: cardAnimations[4]?.scale || new Animated.Value(1) },
+                    { translateY: cardAnimations[4]?.translateY || new Animated.Value(0) }
+                  ],
+                  opacity: cardAnimations[4]?.opacity || new Animated.Value(1)
+                }
+              ]}
+            >
+              <Text style={styles.cardTitle}>Pesanan Pending</Text>
+              <Animated.Text style={styles.cardNumber}>
+                {Math.round(numberCounters.pendingOrdersCount._value)} Pending
+              </Animated.Text>
+            </Animated.View>
+          </TouchableOpacity>
+          
+          <TouchableOpacity onPress={handleNavigateToOrders} style={styles.halfCard}>
+            <Animated.View 
+              style={[
+                styles.statCard,
+                styles.completedCard,
+                {
+                  transform: [
+                    { scale: cardAnimations[5]?.scale || new Animated.Value(1) },
+                    { translateY: cardAnimations[5]?.translateY || new Animated.Value(0) }
+                  ],
+                  opacity: cardAnimations[5]?.opacity || new Animated.Value(1)
+                }
+              ]}
+            >
+              <Text style={styles.cardTitle}>Pesanan Selesai</Text>
+              <Animated.Text style={styles.cardNumber}>
+                {Math.round(numberCounters.completedOrdersCount._value)} Selesai
+              </Animated.Text>
+            </Animated.View>
+          </TouchableOpacity>
+        </View>
       </Animated.View>
       
       <Animated.View 
@@ -510,10 +660,10 @@ const AdminDashboard = () => {
             style={[
               {
                 transform: [
-                  { scale: cardAnimations[3]?.scale || new Animated.Value(1) },
-                  { translateY: cardAnimations[3]?.translateY || new Animated.Value(0) }
+                  { scale: cardAnimations[6]?.scale || new Animated.Value(1) },
+                  { translateY: cardAnimations[6]?.translateY || new Animated.Value(0) }
                 ],
-                opacity: cardAnimations[3]?.opacity || new Animated.Value(1)
+                opacity: cardAnimations[6]?.opacity || new Animated.Value(1)
               }
             ]}
           >
@@ -550,12 +700,18 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: 'bold',
     marginTop: 40,
-    marginBottom: 20,
+    marginBottom: 10,
     textAlign: 'center',
     color: '#333',
   },
+  lastUpdateText: {
+    fontSize: 12,
+    color: '#888',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
   
-  // New Stats Container Styles
+  // Stats Container Styles
   statsContainer: {
     paddingHorizontal: 16,
     marginBottom: 20,
@@ -567,9 +723,6 @@ const styles = StyleSheet.create({
   },
   halfCard: {
     flex: 1,
-    marginHorizontal: 4,
-  },
-  fullCard: {
     marginHorizontal: 4,
   },
   statCard: {
@@ -588,6 +741,33 @@ const styles = StyleSheet.create({
     shadowRadius: 3.84,
     elevation: 5,
   },
+  
+  // Card Color Variants
+  menuCard: {
+    borderLeftWidth: 4,
+    borderLeftColor: '#4285F4',
+  },
+  todayOrdersCard: {
+    borderLeftWidth: 4,
+    borderLeftColor: '#34A853',
+  },
+  totalOrdersCard: {
+    borderLeftWidth: 4,
+    borderLeftColor: '#EA4335',
+  },
+  usersCard: {
+    borderLeftWidth: 4,
+    borderLeftColor: '#FBBC04',
+  },
+  pendingCard: {
+    borderLeftWidth: 4,
+    borderLeftColor: '#FF9800',
+  },
+  completedCard: {
+    borderLeftWidth: 4,
+    borderLeftColor: '#4CAF50',
+  },
+  
   cardTitle: {
     fontSize: 14,
     color: '#666',

@@ -49,6 +49,8 @@ const OrderForm = ({ route, navigation }) => {
 
   const [quantity, setQuantity] = useState('1');
   const [notes, setNotes] = useState('');
+  const [customerName, setCustomerName] = useState(''); // Tambahan: field nama
+  const [customerClass, setCustomerClass] = useState(''); // Tambahan: field kelas
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showPayment, setShowPayment] = useState(false);
   const [paymentUrl, setPaymentUrl] = useState('');
@@ -200,7 +202,7 @@ const OrderForm = ({ route, navigation }) => {
           gross_amount: orderData.totalAmount
         },
         customer_details: {
-          first_name: orderData.userName.split(' ')[0] || 'Customer',
+          first_name: orderData.customerName || orderData.userName.split(' ')[0] || 'Customer',
           last_name: orderData.userName.split(' ').slice(1).join(' ') || '',
           email: orderData.userEmail,
         },
@@ -254,6 +256,17 @@ const OrderForm = ({ route, navigation }) => {
       return;
     }
 
+    // Validasi nama dan kelas
+    if (!customerName.trim()) {
+      Alert.alert('Error', 'Nama harus diisi');
+      return;
+    }
+
+    if (!customerClass.trim()) {
+      Alert.alert('Error', 'Kelas harus diisi');
+      return;
+    }
+
     // Validasi kantin sekali lagi
     if (!kantin || !['A', 'B', 'C', 'D'].includes(kantin)) {
       Alert.alert('Error', 'Data kantin tidak valid. Silakan pilih makanan kembali.');
@@ -267,6 +280,8 @@ const OrderForm = ({ route, navigation }) => {
         userId: user.uid,
         userName: user.displayName || user.email,
         userEmail: user.email,
+        customerName: customerName.trim(), // Tambahan: nama customer
+        customerClass: customerClass.trim(), // Tambahan: kelas customer
         kantin: kantin,
         kantinName: getKantinName(kantin),
         items: [{
@@ -636,6 +651,26 @@ const OrderForm = ({ route, navigation }) => {
         )}
         
         <View style={styles.formContainer}>
+          {/* Tambahan: Form input nama */}
+          <Text style={styles.formLabel}>Nama Lengkap</Text>
+          <TextInput
+            style={styles.textInput}
+            placeholder="Masukkan nama lengkap Anda"
+            value={customerName}
+            onChangeText={setCustomerName}
+            maxLength={50}
+          />
+          
+          {/* Tambahan: Form input kelas */}
+          <Text style={styles.formLabel}>Kelas</Text>
+          <TextInput
+            style={styles.textInput}
+            placeholder="Contoh: XII IPA 1, X A, XI IPS 2"
+            value={customerClass}
+            onChangeText={setCustomerClass}
+            maxLength={20}
+          />
+          
           <Text style={styles.formLabel}>Jumlah Pesanan</Text>
           <View style={styles.quantityContainer}>
             <TouchableOpacity 
@@ -672,6 +707,14 @@ const OrderForm = ({ route, navigation }) => {
           
           <View style={styles.orderSummary}>
             <Text style={styles.summaryTitle}>Ringkasan Pesanan</Text>
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Nama Pemesan</Text>
+              <Text style={styles.summaryValue}>{customerName || '-'}</Text>
+            </View>
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Kelas</Text>
+              <Text style={styles.summaryValue}>{customerClass || '-'}</Text>
+            </View>
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>{food.name}</Text>
               <Text style={styles.summaryValue}>x{quantity}</Text>
