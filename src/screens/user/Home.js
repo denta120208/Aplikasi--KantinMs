@@ -1,3 +1,4 @@
+// Import semua library dan dependency yang diperlukan
 import React, { useState, useEffect, useContext } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, ActivityIndicator, Dimensions } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
@@ -7,143 +8,180 @@ import { collection, getDocs, query, where } from 'firebase/firestore';
 import { AuthContext } from '../../context/AuthContext';
 
 const UserHome = () => {
+  // State untuk menyimpan daftar makanan dari database
   const [foods, setFoods] = useState([]);
+  
+  // State untuk menyimpan kantin yang dipilih user (default: 'A')
   const [selectedCanteen, setSelectedCanteen] = useState('A');
+  
+  // State untuk menandakan apakah sedang loading data atau tidak
   const [isLoading, setIsLoading] = useState(true);
+  
+  // Hook untuk navigasi antar screen
   const navigation = useNavigation();
+  
+  // Mengambil data user dari AuthContext
   const { user } = useContext(AuthContext);
 
-  // Get screen width for responsive image sizing
+  // Mendapatkan lebar layar untuk responsive design
   const screenWidth = Dimensions.get('window').width;
-  const cardWidth = screenWidth - 40; // Account for padding
+  const cardWidth = screenWidth - 40; // Kurangi 40 untuk padding kiri-kanan
 
+  // Data kantin yang tersedia dengan konfigurasi tampilan
   const canteens = [
-    { label: 'Kantin A', value: 'A', icon: '🏪', color: '#4285F4' },
-    { label: 'Kantin B', value: 'B', icon: '🍽️', color: '#34A853' },
-    { label: 'Kantin C', value: 'C', icon: '🥘', color: '#FF9800' },
-    { label: 'Kantin D', value: 'D', icon: '🍜', color: '#9C27B0' }
+    { label: 'Kantin A', value: 'A', icon: '🏪', color: '#4285F4' }, // Biru
+    { label: 'Kantin B', value: 'B', icon: '🍽️', color: '#34A853' }, // Hijau
+    { label: 'Kantin C', value: 'C', icon: '🥘', color: '#FF9800' }, // Orange
+    { label: 'Kantin D', value: 'D', icon: '🍜', color: '#9C27B0' }  // Ungu
   ];
 
+  // useEffect akan dijalankan setiap kali selectedCanteen berubah
   useEffect(() => {
-    fetchFoods();
+    fetchFoods(); // Ambil data makanan sesuai kantin yang dipilih
   }, [selectedCanteen]);
 
+  // Fungsi untuk mengambil data makanan dari Firestore
   const fetchFoods = async () => {
-    setIsLoading(true);
+    setIsLoading(true); // Set loading true saat mulai fetch data
     try {
+      // Referensi ke collection 'foods' di Firestore
       const foodsCollection = collection(db, 'foods');
+      
+      // Query untuk filter makanan berdasarkan kantin yang dipilih
       const q = query(
         foodsCollection, 
-        where('canteen', '==', selectedCanteen)
+        where('canteen', '==', selectedCanteen) // Filter: canteen = selectedCanteen
       );
+      
+      // Eksekusi query dan ambil hasilnya
       const foodsSnapshot = await getDocs(q);
+      
+      // Transform data dari Firestore menjadi array objek JavaScript
       const foodsList = foodsSnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
+        id: doc.id,        // ID dokumen
+        ...doc.data()      // Spread semua field dari dokumen
       }));
       
-      // Sort in JavaScript instead of Firestore query
+      // Sorting data di JavaScript (bukan di Firestore)
       const sortedFoods = foodsList.sort((a, b) => {
-        // Sort by createdAt if it exists, otherwise by name
+        // Prioritas sorting: berdasarkan createdAt, jika tidak ada maka berdasarkan nama
         if (a.createdAt && b.createdAt) {
+          // Sort berdasarkan tanggal (terbaru dulu)
           return b.createdAt.toMillis() - a.createdAt.toMillis();
         }
+        // Jika tidak ada createdAt, sort berdasarkan nama (A-Z)
         return a.name.localeCompare(b.name);
       });
       
+      // Update state dengan data yang sudah disort
       setFoods(sortedFoods);
     } catch (error) {
       console.error('Error fetching foods:', error);
     } finally {
-      setIsLoading(false);
+      setIsLoading(false); // Set loading false setelah selesai (sukses/error)
     }
   };
 
+  // Handler ketika user menekan tombol order
   const handleOrderPress = (food) => {
+    // Navigasi ke screen OrderForm dengan membawa data food dan user
     navigation.navigate('OrderForm', { food, user });
   };
 
+  // Handler ketika user memilih kantin
   const handleCanteenSelect = (canteenValue) => {
-    setSelectedCanteen(canteenValue);
+    setSelectedCanteen(canteenValue); // Update state kantin yang dipilih
   };
 
+  // Fungsi untuk mendapatkan data kantin yang sedang dipilih
   const getCurrentCanteen = () => {
     return canteens.find(canteen => canteen.value === selectedCanteen);
   };
 
-  // Calculate dynamic image height based on admin's cropped aspect ratio
+  // Fungsi untuk menghitung style gambar berdasarkan aspect ratio
   const getFoodImageStyle = (food) => {
+    // Cek apakah ada metadata aspect ratio dari admin
     if (food.imageMetadata && food.imageMetadata.aspectRatio) {
-      // Use the exact aspect ratio from admin's crop
+      // Hitung tinggi berdasarkan aspect ratio
       const height = cardWidth / food.imageMetadata.aspectRatio;
       return {
         width: '100%',
-        height: Math.max(120, Math.min(height, 300)), // Min 120, max 300 for better UX
+        height: Math.max(120, Math.min(height, 300)), // Min 120px, max 300px
         borderRadius: 12,
       };
     }
-    // Fallback for legacy images without metadata
+    // Fallback untuk gambar lama tanpa metadata
     return {
       width: '100%',
-      height: 200, // Default height
+      height: 200, // Tinggi default
       borderRadius: 12,
     };
   };
 
-  // Determine the best resize mode based on aspect ratio
+  // Fungsi untuk menentukan resize mode gambar
   const getResizeMode = (food) => {
     if (food.imageMetadata && food.imageMetadata.aspectRatio) {
-      // Since admin already cropped the image to desired ratio, use 'cover' to fill nicely
+      // Gunakan 'cover' karena admin sudah crop sesuai keinginan
       return 'cover';
     }
-    return 'cover'; // Default for legacy images
+    return 'cover'; // Default untuk gambar lama
   };
 
-  // Get image URI - handle both legacy and new format
+  // Fungsi untuk mendapatkan URI gambar (handle format lama dan baru)
   const getImageUri = (food) => {
     if (typeof food.imageData === 'string') {
+      // Format lama: imageData langsung berupa string URI
       return food.imageData;
     } else if (food.imageData && food.imageData.uri) {
+      // Format baru: imageData berupa objek dengan property uri
       return food.imageData.uri;
     }
-    return null;
+    return null; // Tidak ada gambar
   };
 
-  // Calculate if image is landscape, portrait, or square for layout decisions
+  // Fungsi untuk menentukan orientasi gambar
   const getImageOrientation = (food) => {
     if (food.imageMetadata && food.imageMetadata.aspectRatio) {
       const ratio = food.imageMetadata.aspectRatio;
-      if (ratio > 1.3) return 'landscape';
-      if (ratio < 0.7) return 'portrait';
-      return 'square';
+      if (ratio > 1.3) return 'landscape';  // Gambar landscape
+      if (ratio < 0.7) return 'portrait';   // Gambar portrait
+      return 'square';                      // Gambar kotak
     }
-    return 'unknown';
+    return 'unknown'; // Tidak diketahui
   };
 
+  // Render utama komponen
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+      {/* Header dengan greeting */}
       <View style={styles.header}>
-        <Text style={styles.greeting}>Halo, {user?.displayName || 'Pengguna'} 👋</Text>
+        <Text style={styles.greeting}>
+          Halo, {user?.displayName || 'Pengguna'} 👋
+        </Text>
         <Text style={styles.subGreeting}>Pilih kantin favorit Anda!</Text>
       </View>
 
-      {/* Canteen Selection */}
+      {/* Section untuk memilih kantin */}
       <View style={styles.canteenSection}>
         <Text style={styles.canteenTitle}>🏫 Pilih Kantin</Text>
+        
+        {/* ScrollView horizontal untuk daftar kantin */}
         <ScrollView 
           horizontal 
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.canteenContainer}
         >
+          {/* Map semua kantin menjadi TouchableOpacity */}
           {canteens.map((canteen) => (
             <TouchableOpacity
               key={canteen.value}
               style={[
                 styles.canteenCard,
-                { borderColor: canteen.color },
+                { borderColor: canteen.color }, // Border sesuai warna kantin
+                // Style khusus jika kantin ini yang dipilih
                 selectedCanteen === canteen.value && { 
                   backgroundColor: canteen.color,
-                  transform: [{ scale: 1.05 }]
+                  transform: [{ scale: 1.05 }] // Sedikit diperbesar
                 }
               ]}
               onPress={() => handleCanteenSelect(canteen.value)}
@@ -152,10 +190,13 @@ const UserHome = () => {
               <Text style={styles.canteenIcon}>{canteen.icon}</Text>
               <Text style={[
                 styles.canteenLabel,
+                // Warna text putih jika kantin dipilih
                 selectedCanteen === canteen.value && styles.selectedCanteenLabel
               ]}>
                 {canteen.label}
               </Text>
+              
+              {/* Indikator checkmark jika kantin dipilih */}
               {selectedCanteen === canteen.value && (
                 <View style={styles.selectedIndicator}>
                   <Ionicons name="checkmark-circle" size={20} color="#fff" />
@@ -166,28 +207,40 @@ const UserHome = () => {
         </ScrollView>
       </View>
 
-      {/* Current Canteen Header */}
+      {/* Header untuk kantin yang sedang dipilih */}
       <View style={[
         styles.currentCanteenHeader,
+        // Background color dengan opacity 20% dari warna kantin
         { backgroundColor: getCurrentCanteen()?.color + '20' }
       ]}>
         <Text style={styles.currentCanteenIcon}>{getCurrentCanteen()?.icon}</Text>
         <View>
-          <Text style={styles.currentCanteenTitle}>Menu {getCurrentCanteen()?.label}</Text>
+          <Text style={styles.currentCanteenTitle}>
+            Menu {getCurrentCanteen()?.label}
+          </Text>
           <Text style={styles.currentCanteenSubtitle}>
             {foods.length} menu tersedia
           </Text>
         </View>
       </View>
 
+      {/* Conditional rendering: tampilkan loading atau daftar makanan */}
       {isLoading ? (
+        // Loading state
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={getCurrentCanteen()?.color || "#4285F4"} />
-          <Text style={styles.loadingText}>Memuat menu {getCurrentCanteen()?.label}...</Text>
+          <ActivityIndicator 
+            size="large" 
+            color={getCurrentCanteen()?.color || "#4285F4"} 
+          />
+          <Text style={styles.loadingText}>
+            Memuat menu {getCurrentCanteen()?.label}...
+          </Text>
         </View>
       ) : (
+        // Container untuk daftar makanan
         <View style={styles.menuContainer}>
           {foods.length > 0 ? (
+            // Jika ada makanan, map menjadi card
             foods.map((food) => {
               const imageUri = getImageUri(food);
               const imageOrientation = getImageOrientation(food);
@@ -197,17 +250,19 @@ const UserHome = () => {
                   key={food.id} 
                   style={[
                     styles.foodCard,
-                    // Add extra spacing for portrait images
+                    // Style khusus untuk gambar portrait (spacing lebih)
                     imageOrientation === 'portrait' && styles.portraitCard
                   ]}
                   onPress={() => handleOrderPress(food)}
                   activeOpacity={0.8}
                 >
+                  {/* Container gambar dengan dynamic styling */}
                   <View style={[
                     styles.imageContainer,
-                    getFoodImageStyle(food)
+                    getFoodImageStyle(food) // Apply dynamic image style
                   ]}>
                     {imageUri ? (
+                      // Jika ada gambar, tampilkan Image component
                       <Image 
                         source={{ uri: imageUri }} 
                         style={styles.foodImage}
@@ -217,15 +272,19 @@ const UserHome = () => {
                         }}
                       />
                     ) : (
+                      // Jika tidak ada gambar, tampilkan placeholder
                       <View style={styles.noImageContainer}>
                         <Ionicons name="image-outline" size={50} color="#ccc" />
                         <Text style={styles.noImageText}>No Image</Text>
                       </View>
                     )}
                     
-                    {/* Gradient overlay for better text readability */}
+                    {/* Overlay gradient untuk readability text */}
                     <View style={styles.imageOverlay} />
+                    
+                    {/* Content di atas gambar */}
                     <View style={styles.imageContent}>
+                      {/* Badge kantin */}
                       <View style={[
                         styles.canteenBadge,
                         { backgroundColor: getCurrentCanteen()?.color }
@@ -235,7 +294,7 @@ const UserHome = () => {
                         </Text>
                       </View>
                       
-                      {/* Show image ratio info for debugging if needed */}
+                      {/* Debug info (hanya muncul di development mode) */}
                       {food.imageMetadata && __DEV__ && (
                         <View style={styles.debugInfo}>
                           <Text style={styles.debugText}>
@@ -246,7 +305,9 @@ const UserHome = () => {
                     </View>
                   </View>
                   
+                  {/* Info makanan di bawah gambar */}
                   <View style={styles.foodInfo}>
+                    {/* Header: nama dan harga */}
                     <View style={styles.foodHeader}>
                       <Text style={styles.foodName}>{food.name}</Text>
                       <Text style={[
@@ -257,10 +318,12 @@ const UserHome = () => {
                       </Text>
                     </View>
                     
+                    {/* Deskripsi makanan (maksimal 2 baris) */}
                     <Text style={styles.foodDescription} numberOfLines={2}>
                       {food.description}
                     </Text>
                     
+                    {/* Container tombol order */}
                     <View style={styles.orderButtonContainer}>
                       <TouchableOpacity
                         style={[
@@ -279,6 +342,7 @@ const UserHome = () => {
               );
             })
           ) : (
+            // Jika tidak ada makanan, tampilkan empty state
             <View style={styles.emptyContainer}>
               <Text style={styles.emptyIcon}>🍽️</Text>
               <Text style={styles.emptyTitle}>Menu Belum Tersedia</Text>
@@ -293,32 +357,35 @@ const UserHome = () => {
   );
 };
 
+// StyleSheet untuk semua styling komponen
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8f9fa',
+    backgroundColor: '#f8f9fa', // Background abu-abu muda
   },
   header: {
     padding: 20,
-    paddingTop: 60,
+    paddingTop: 60, // Extra padding top untuk status bar
     backgroundColor: '#fff',
     borderBottomLeftRadius: 25,
     borderBottomRightRadius: 25,
+    // Shadow untuk iOS
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 8,
+    // Shadow untuk Android
     elevation: 5,
   },
   greeting: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#2c3e50',
+    color: '#2c3e50', // Warna text gelap
     marginBottom: 5,
   },
   subGreeting: {
     fontSize: 16,
-    color: '#7f8c8d',
+    color: '#7f8c8d', // Warna text abu-abu
   },
   canteenSection: {
     padding: 20,
@@ -330,7 +397,7 @@ const styles = StyleSheet.create({
     marginBottom: 15,
   },
   canteenContainer: {
-    paddingRight: 20,
+    paddingRight: 20, // Padding kanan untuk scroll horizontal
   },
   canteenCard: {
     backgroundColor: '#fff',
@@ -341,6 +408,7 @@ const styles = StyleSheet.create({
     borderColor: '#e9ecef',
     alignItems: 'center',
     minWidth: 100,
+    // Shadow
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
@@ -358,7 +426,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   selectedCanteenLabel: {
-    color: '#fff',
+    color: '#fff', // Text putih ketika kantin dipilih
   },
   selectedIndicator: {
     position: 'absolute',
@@ -407,18 +475,19 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     borderRadius: 20,
     marginBottom: 20,
+    // Shadow yang lebih prominent
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.12,
     shadowRadius: 8,
     elevation: 6,
-    overflow: 'hidden',
+    overflow: 'hidden', // Penting untuk border radius
   },
   portraitCard: {
-    marginBottom: 25, // Extra spacing for portrait images
+    marginBottom: 25, // Extra spacing untuk gambar portrait
   },
   imageContainer: {
-    position: 'relative',
+    position: 'relative', // Untuk absolute positioning overlay
     overflow: 'hidden',
   },
   foodImage: {
@@ -443,7 +512,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.3)',
+    backgroundColor: 'rgba(0,0,0,0.3)', // Dark overlay 30% opacity
   },
   imageContent: {
     position: 'absolute',
@@ -489,12 +558,13 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: 'bold',
     color: '#2c3e50',
-    flex: 1,
+    flex: 1, // Mengambil sisa space
     marginRight: 10,
   },
   foodPrice: {
     fontSize: 18,
     fontWeight: 'bold',
+    // Color dinamis berdasarkan kantin
   },
   foodDescription: {
     fontSize: 14,

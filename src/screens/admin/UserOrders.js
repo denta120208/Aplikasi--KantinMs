@@ -51,159 +51,134 @@ const UserOrders = ({ route }) => {
   }, [adminKantin, selectedKantin]);
 
   // Auto-check payment status for pending payments using simulation
- // Auto-check payment status for pending payments using simulation
-useEffect(() => {
-  const checkPendingPayments = async () => {
-    const pendingOrders = orders.filter(order => 
-      order.paymentStatus === 'pending' && 
-      order.midtransOrderId &&
-      // Only check orders created in the last 24 hours
-      (new Date() - order.createdAt) < 24 * 60 * 60 * 1000
-    );
+  useEffect(() => {
+    const checkPendingPayments = async () => {
+      const pendingOrders = orders.filter(order => 
+        order.paymentStatus === 'pending' && 
+        order.midtransOrderId &&
+        // Only check orders created in the last 24 hours
+        (new Date() - order.createdAt) < 24 * 60 * 60 * 1000
+      );
 
-    if (pendingOrders.length > 0) {
-      console.log(`Auto-checking ${pendingOrders.length} pending payments...`);
-      
-      for (const order of pendingOrders) {
-        try {
-          await simulatePaymentStatusCheck(order.id, order.kantin, order.midtransOrderId, order.createdAt, false);
-          // Add delay between checks
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        } catch (error) {
-          console.error(`Auto-check failed for order ${order.id}:`, error);
+      if (pendingOrders.length > 0) {
+        console.log(`Auto-checking ${pendingOrders.length} pending payments...`);
+        
+        for (const order of pendingOrders) {
+          try {
+            await simulatePaymentStatusCheck(order.id, order.kantin, order.midtransOrderId, order.createdAt, false);
+            // Add delay between checks
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          } catch (error) {
+            console.error(`Auto-check failed for order ${order.id}:`, error);
+          }
         }
       }
-    }
-  };
+    };
 
-  // Start auto-checking if there are pending orders
-  const pendingCount = orders.filter(order => 
-    order.paymentStatus === 'pending' && order.midtransOrderId
-  ).length;
-  
-  if (pendingCount > 0) {
-    // Check immediately
-    checkPendingPayments();
+    // Start auto-checking if there are pending orders
+    const pendingCount = orders.filter(order => 
+      order.paymentStatus === 'pending' && order.midtransOrderId
+    ).length;
     
-    // MODIFIKASI: Set up interval to check every 30 seconds instead of 2 minutes
-    paymentCheckInterval.current = setInterval(checkPendingPayments, 30 * 1000);
-  } else {
-    // Clear interval if no pending orders
-    if (paymentCheckInterval.current) {
-      clearInterval(paymentCheckInterval.current);
-      paymentCheckInterval.current = null;
+    if (pendingCount > 0) {
+      // Check immediately
+      checkPendingPayments();
+      
+      // Set up interval to check every 30 seconds
+      paymentCheckInterval.current = setInterval(checkPendingPayments, 30 * 1000);
+    } else {
+      // Clear interval if no pending orders
+      if (paymentCheckInterval.current) {
+        clearInterval(paymentCheckInterval.current);
+        paymentCheckInterval.current = null;
+      }
     }
-  }
 
-  // Cleanup interval on unmount or when orders change
-  return () => {
-    if (paymentCheckInterval.current) {
-      clearInterval(paymentCheckInterval.current);
-      paymentCheckInterval.current = null;
-    }
-  };
-}, [orders]);
+    // Cleanup interval on unmount or when orders change
+    return () => {
+      if (paymentCheckInterval.current) {
+        clearInterval(paymentCheckInterval.current);
+        paymentCheckInterval.current = null;
+      }
+    };
+  }, [orders]);
 
   // Simulasi pengecekan status pembayaran tanpa API call langsung
-  // Simulasi pengecekan status pembayaran tanpa API call langsung
-const simulatePaymentStatusCheck = async (orderId, orderKantin, midtransOrderId, orderCreatedAt, showAlert = true) => {
-  if (isCheckingPayment[orderId]) return;
-  
-  setIsCheckingPayment(prev => ({ ...prev, [orderId]: true }));
-  
-  try {
-    // Simulasi delay API call
-    await new Promise(resolve => setTimeout(resolve, 1500));
+  const simulatePaymentStatusCheck = async (orderId, orderKantin, midtransOrderId, orderCreatedAt, showAlert = true) => {
+    if (isCheckingPayment[orderId]) return;
     
-    const now = new Date();
-    const timeDiff = now - orderCreatedAt;
-    const minutesDiff = timeDiff / (1000 * 60);
+    setIsCheckingPayment(prev => ({ ...prev, [orderId]: true }));
     
-    let newPaymentStatus = 'pending';
-    let statusChanged = false;
-    
-    // MODIFIKASI: Langsung set ke paid untuk semua pembayaran yang baru
-    // Atau berdasarkan kondisi tertentu
-    
-    // Opsi 1: Langsung paid untuk semua order
-    newPaymentStatus = 'paid';
-    statusChanged = true;
-    
-    /* 
-    // Opsi 2: Berdasarkan waktu yang lebih singkat (2 menit)
-    if (minutesDiff >= 2) {
+    try {
+      // Simulasi delay API call
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      
+      const now = new Date();
+      const timeDiff = now - orderCreatedAt;
+      const minutesDiff = timeDiff / (1000 * 60);
+      
+      let newPaymentStatus = 'pending';
+      let statusChanged = false;
+      
+      // Langsung set ke paid untuk semua pembayaran yang baru
       newPaymentStatus = 'paid';
       statusChanged = true;
-    }
-    */
-    
-    /* 
-    // Opsi 3: Berdasarkan pattern order ID dengan probabilitas tinggi
-    const hash = midtransOrderId.split('-').pop() || '';
-    const hashNum = hash.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-    
-    // 95% chance of immediate success
-    if (hashNum % 100 < 95) {
-      newPaymentStatus = 'paid';
-      statusChanged = true;
-    }
-    */
-    
-    // Update status jika ada perubahan
-    if (statusChanged) {
-      const updateData = {
-        paymentStatus: newPaymentStatus,
-        lastPaymentCheck: new Date(),
-        midtransTransactionStatus: newPaymentStatus === 'paid' ? 'settlement' : 'pending',
-        midtransPaymentType: newPaymentStatus === 'paid' ? 'bank_transfer' : null,
-        midtransTransactionTime: newPaymentStatus === 'paid' ? new Date().toISOString() : null,
-        simulatedUpdate: true // Mark as simulated for tracking
-      };
+      
+      // Update status jika ada perubahan
+      if (statusChanged) {
+        const updateData = {
+          paymentStatus: newPaymentStatus,
+          lastPaymentCheck: new Date(),
+          midtransTransactionStatus: newPaymentStatus === 'paid' ? 'settlement' : 'pending',
+          midtransPaymentType: newPaymentStatus === 'paid' ? 'bank_transfer' : null,
+          midtransTransactionTime: newPaymentStatus === 'paid' ? new Date().toISOString() : null,
+          simulatedUpdate: true // Mark as simulated for tracking
+        };
 
-      // Update kantin-specific collection
-      if (adminKantin !== 'all') {
-        await updateDoc(doc(db, `orders_kantin_${adminKantin.toLowerCase()}`, orderId), updateData);
+        // Update kantin-specific collection
+        if (adminKantin !== 'all') {
+          await updateDoc(doc(db, `orders_kantin_${adminKantin.toLowerCase()}`, orderId), updateData);
+        }
+        
+        // Update general orders collection
+        try {
+          await updateDoc(doc(db, 'orders', orderId), updateData);
+        } catch (generalError) {
+          console.log('General orders update failed:', generalError);
+        }
+        
+        if (showAlert) {
+          const statusMessage = newPaymentStatus === 'paid' 
+            ? '✅ Pembayaran berhasil dikonfirmasi!' 
+            : `Status pembayaran diperbarui: ${getPaymentStatusText(newPaymentStatus)}`;
+            
+          Alert.alert('Status Updated', statusMessage);
+        } else {
+          console.log(`Payment status updated for order ${orderId}: ${newPaymentStatus}`);
+        }
+      } else if (showAlert) {
+        Alert.alert('Info', `Status pembayaran masih: ${getPaymentStatusText(newPaymentStatus)}`);
       }
       
-      // Update general orders collection
-      try {
-        await updateDoc(doc(db, 'orders', orderId), updateData);
-      } catch (generalError) {
-        console.log('General orders update failed:', generalError);
-      }
-      
+    } catch (error) {
       if (showAlert) {
-        const statusMessage = newPaymentStatus === 'paid' 
-          ? '✅ Pembayaran berhasil dikonfirmasi!' 
-          : `Status pembayaran diperbarui: ${getPaymentStatusText(newPaymentStatus)}`;
-          
-        Alert.alert('Status Updated', statusMessage);
-      } else {
-        console.log(`Payment status updated for order ${orderId}: ${newPaymentStatus}`);
+        Alert.alert(
+          'Info', 
+          'Tidak dapat mengecek status secara otomatis. Silakan update manual jika pembayaran sudah berhasil.',
+          [
+            { text: 'Batal', style: 'cancel' },
+            { 
+              text: 'Update Manual ke PAID', 
+              onPress: () => manualUpdatePaymentStatus(orderId, orderKantin, 'paid')
+            }
+          ]
+        );
       }
-    } else if (showAlert) {
-      Alert.alert('Info', `Status pembayaran masih: ${getPaymentStatusText(newPaymentStatus)}`);
+      console.error('Error updating payment status:', error);
+    } finally {
+      setIsCheckingPayment(prev => ({ ...prev, [orderId]: false }));
     }
-    
-  } catch (error) {
-    if (showAlert) {
-      Alert.alert(
-        'Info', 
-        'Tidak dapat mengecek status secara otomatis. Silakan update manual jika pembayaran sudah berhasil.',
-        [
-          { text: 'Batal', style: 'cancel' },
-          { 
-            text: 'Update Manual ke PAID', 
-            onPress: () => manualUpdatePaymentStatus(orderId, orderKantin, 'paid')
-          }
-        ]
-      );
-    }
-    console.error('Error updating payment status:', error);
-  } finally {
-    setIsCheckingPayment(prev => ({ ...prev, [orderId]: false }));
-  }
-};
+  };
 
   // Manual update payment status (fallback)
   const manualUpdatePaymentStatus = async (orderId, orderKantin, newStatus) => {
@@ -495,7 +470,7 @@ const simulatePaymentStatusCheck = async (orderId, orderKantin, midtransOrderId,
           <Ionicons name="information-circle" size={16} color="#4285F4" />
           <View style={styles.autoCheckTextContainer}>
             <Text style={styles.autoCheckText}>
-              {`Simulasi auto-check ${pendingPaymentsCount} pending payment${pendingPaymentsCount > 1 ? 's' : ''} setiap 2 menit`}
+              {`Simulasi auto-check ${pendingPaymentsCount} pending payment${pendingPaymentsCount > 1 ? 's' : ''} setiap 30 detik`}
             </Text>
             <Text style={styles.autoCheckSubText}>
               (Gunakan "Cek Status" atau "Update Manual" untuk update langsung)
@@ -572,7 +547,10 @@ const simulatePaymentStatusCheck = async (orderId, orderKantin, midtransOrderId,
               >
                 <View>
                   <View style={styles.userKantinRow}>
-                    <Text style={styles.orderUser}>{order.userName}</Text>
+                    {/* FIXED: Display customer name and class properly */}
+                    <Text style={styles.orderUser}>
+                      {order.customerName || order.userName || 'Customer'}
+                    </Text>
                     {order.kantin && adminKantin === 'all' && (
                       <View style={[
                         styles.kantinBadge, 
@@ -584,6 +562,14 @@ const simulatePaymentStatusCheck = async (orderId, orderKantin, midtransOrderId,
                       </View>
                     )}
                   </View>
+                  
+                  {/* ADDED: Display class information */}
+                  {order.customerClass && (
+                    <Text style={styles.orderClass}>
+                      Kelas: {order.customerClass}
+                    </Text>
+                  )}
+                  
                   <Text style={styles.orderDate}>{formatDate(order.createdAt)}</Text>
                   <Text style={styles.orderTotalSmall}>
                     {`Total: Rp ${order.totalAmount.toLocaleString()}`}
@@ -639,6 +625,35 @@ const simulatePaymentStatusCheck = async (orderId, orderKantin, midtransOrderId,
               
               {expandedOrderId === order.id && (
                 <View style={styles.orderDetails}>
+                  {/* ADDED: Customer Information Section */}
+                  <View style={styles.customerInfoContainer}>
+                    <Text style={styles.customerInfoTitle}>Informasi Customer:</Text>
+                    <View style={styles.customerInfoRow}>
+                      <Text style={styles.customerInfoLabel}>Nama:</Text>
+                      <Text style={styles.customerInfoValue}>
+                        {order.customerName || order.userName || 'Tidak tersedia'}
+                      </Text>
+                    </View>
+                    {order.customerClass && (
+                      <View style={styles.customerInfoRow}>
+                        <Text style={styles.customerInfoLabel}>Kelas:</Text>
+                        <Text style={styles.customerInfoValue}>{order.customerClass}</Text>
+                      </View>
+                    )}
+                    {order.customerPhone && (
+                      <View style={styles.customerInfoRow}>
+                        <Text style={styles.customerInfoLabel}>No. HP:</Text>
+                        <Text style={styles.customerInfoValue}>{order.customerPhone}</Text>
+                      </View>
+                    )}
+                    {order.customerEmail && (
+                      <View style={styles.customerInfoRow}>
+                        <Text style={styles.customerInfoLabel}>Email:</Text>
+                        <Text style={styles.customerInfoValue}>{order.customerEmail}</Text>
+                      </View>
+                    )}
+                  </View>
+                  
                   <Text style={styles.orderDetailTitle}>Detail Pesanan:</Text>
                   {order.items.map((item, index) => (
                     <View key={index} style={styles.orderItem}>

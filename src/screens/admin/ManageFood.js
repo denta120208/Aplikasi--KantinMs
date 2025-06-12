@@ -7,16 +7,18 @@ import { db } from '../../config/firebaseConfig';
 import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc, query, where } from 'firebase/firestore';
 
 const ManageFood = () => {
-  const [foods, setFoods] = useState([]);
-  const [name, setName] = useState('');
-  const [price, setPrice] = useState('');
-  const [description, setDescription] = useState('');
-  const [image, setImage] = useState(null);
-  const [selectedCanteen, setSelectedCanteen] = useState('A');
-  const [isEditing, setIsEditing] = useState(false);
-  const [editId, setEditId] = useState(null);
-  const [isLoading, setIsLoading] = useState(false);
+  // State untuk data makanan dan form
+  const [foods, setFoods] = useState([]); // Daftar makanan
+  const [name, setName] = useState(''); // Nama makanan
+  const [price, setPrice] = useState(''); // Harga makanan
+  const [description, setDescription] = useState(''); // Deskripsi makanan
+  const [image, setImage] = useState(null); // Gambar makanan
+  const [selectedCanteen, setSelectedCanteen] = useState('A'); // Kantin yang dipilih
+  const [isEditing, setIsEditing] = useState(false); // Status edit mode
+  const [editId, setEditId] = useState(null); // ID makanan yang sedang diedit
+  const [isLoading, setIsLoading] = useState(false); // Status loading
 
+  // Daftar kantin yang tersedia
   const canteens = [
     { label: 'Kantin A', value: 'A' },
     { label: 'Kantin B', value: 'B' },
@@ -24,20 +26,27 @@ const ManageFood = () => {
     { label: 'Kantin D', value: 'D' }
   ];
 
+  // Ambil data makanan saat komponen dimount atau kantin berubah
   useEffect(() => {
     console.log("Component mounted, fetching foods for canteen:", selectedCanteen);
     fetchFoods();
   }, [selectedCanteen]);
 
+  // Fungsi untuk mengambil data makanan dari Firestore
   const fetchFoods = async () => {
     console.log("Starting to fetch foods for canteen:", selectedCanteen);
     setIsLoading(true);
     try {
+      // Query makanan berdasarkan kantin yang dipilih
       const foodsCollection = collection(db, 'foods');
       const q = query(foodsCollection, where('canteen', '==', selectedCanteen));
       console.log("Query created for canteen:", selectedCanteen);
+      
+      // Ambil data dari Firestore
       const foodsSnapshot = await getDocs(q);
       console.log(`Fetched ${foodsSnapshot.size} foods for canteen ${selectedCanteen}`);
+      
+      // Convert data ke array
       const foodsList = foodsSnapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
@@ -53,22 +62,23 @@ const ManageFood = () => {
     }
   };
 
+  // Fungsi untuk memilih gambar dari galeri
   const pickImage = async () => {
     try {
+      // Buka image picker
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
-        // Remove fixed aspect ratio to allow free cropping
-        // aspect: [4, 3], // Removed this line
-        quality: 0.8, // Increased quality for better image preservation
+        quality: 0.8, // Kualitas gambar
         allowsMultipleSelection: false,
       });
 
       if (!result.canceled) {
         const selectedImage = result.assets[0];
+        // Convert gambar ke base64
         const base64Image = await convertImageToBase64(selectedImage.uri);
         
-        // Store both base64 and dimensions for flexible display
+        // Simpan gambar dengan metadata
         setImage({
           uri: base64Image,
           width: selectedImage.width,
@@ -82,6 +92,7 @@ const ManageFood = () => {
     }
   };
 
+  // Fungsi untuk convert gambar ke base64
   const convertImageToBase64 = async (uri) => {
     try {
       setIsLoading(true);
@@ -108,7 +119,9 @@ const ManageFood = () => {
     }
   };
 
+  // Fungsi untuk menyimpan atau update makanan
   const handleSave = async () => {
+    // Validasi input
     if (!name || !price || !description || (!image && !isEditing)) {
       Alert.alert('Error', 'Semua field harus diisi');
       return;
@@ -119,13 +132,14 @@ const ManageFood = () => {
       let imageData = null;
       let imageMetadata = null;
       
+      // Handle gambar untuk mode edit atau tambah baru
       if (isEditing && image && typeof image === 'string') {
-        // If editing and image is still a string (not changed)
+        // Edit mode - gambar tidak berubah
         const food = foods.find(f => f.id === editId);
         imageData = food.imageData;
         imageMetadata = food.imageMetadata || null;
       } else if (image && typeof image === 'object') {
-        // New image selected
+        // Gambar baru dipilih
         imageData = image.uri;
         imageMetadata = {
           width: image.width,
@@ -133,25 +147,28 @@ const ManageFood = () => {
           aspectRatio: image.aspectRatio
         };
       } else if (isEditing) {
-        // Editing but no new image
+        // Edit mode - tidak ada gambar baru
         const food = foods.find(f => f.id === editId);
         imageData = food.imageData;
         imageMetadata = food.imageMetadata || null;
       }
 
+      // Data makanan yang akan disimpan
       const foodData = {
         name,
         price: Number(price),
         description,
         imageData,
-        imageMetadata, // Store image metadata for flexible display
+        imageMetadata,
         canteen: selectedCanteen
       };
 
       if (isEditing) {
+        // Update makanan yang sudah ada
         await updateDoc(doc(db, 'foods', editId), foodData);
         Alert.alert('Sukses', `Makanan berhasil diupdate untuk Kantin ${selectedCanteen}`);
       } else {
+        // Tambah makanan baru
         await addDoc(collection(db, 'foods'), {
           ...foodData,
           createdAt: new Date()
@@ -159,13 +176,14 @@ const ManageFood = () => {
         Alert.alert('Sukses', `Makanan berhasil ditambahkan ke Kantin ${selectedCanteen}`);
       }
 
+      // Reset form setelah berhasil
       setName('');
       setPrice('');
       setDescription('');
       setImage(null);
       setIsEditing(false);
       setEditId(null);
-      fetchFoods();
+      fetchFoods(); // Refresh daftar makanan
     } catch (error) {
       console.error('Error saving food:', error);
       Alert.alert('Error', 'Gagal menyimpan data makanan: ' + error.message);
@@ -174,12 +192,14 @@ const ManageFood = () => {
     }
   };
 
+  // Fungsi untuk memulai edit makanan
   const handleEdit = (food) => {
+    // Isi form dengan data makanan yang akan diedit
     setName(food.name);
     setPrice(food.price.toString());
     setDescription(food.description);
     
-    // Handle both old format (string) and new format (object) images
+    // Handle format gambar lama dan baru
     if (typeof food.imageData === 'string') {
       setImage(food.imageData);
     } else {
@@ -191,11 +211,13 @@ const ManageFood = () => {
     setEditId(food.id);
   };
 
+  // Fungsi untuk menghapus makanan dari Firestore
   const deleteFood = async (id) => {
     console.log("Starting delete operation for food:", id);
     try {
       setIsLoading(true);
       
+      // Hapus dokumen dari Firestore
       const foodRef = doc(db, 'foods', id);
       console.log("Document reference created");
       
@@ -205,9 +227,11 @@ const ManageFood = () => {
       
       Alert.alert('Sukses', 'Makanan berhasil dihapus');
       
+      // Update state local untuk menghapus item
       setFoods(prevFoods => prevFoods.filter(food => food.id !== id));
       console.log("State updated");
       
+      // Reset form jika sedang edit makanan yang dihapus
       if (isEditing && editId === id) {
         setName('');
         setPrice('');
@@ -226,6 +250,7 @@ const ManageFood = () => {
     }
   };
 
+  // Fungsi untuk menampilkan konfirmasi hapus
   const handleDeletePress = (id) => {
     console.log("Delete button pressed for food:", id);
     Alert.alert(
@@ -250,6 +275,7 @@ const ManageFood = () => {
     );
   };
 
+  // Fungsi untuk reset form
   const resetForm = () => {
     setName('');
     setPrice('');
@@ -259,7 +285,7 @@ const ManageFood = () => {
     setEditId(null);
   };
 
-  // Helper function to get image URI for display
+  // Helper function untuk mendapatkan URI gambar
   const getImageUri = (imageData) => {
     if (typeof imageData === 'object' && imageData.uri) {
       return imageData.uri;
@@ -267,24 +293,24 @@ const ManageFood = () => {
     return imageData;
   };
 
-  // Helper function to calculate dynamic height for food cards
+  // Helper function untuk menghitung style gambar berdasarkan aspect ratio
   const getFoodImageStyle = (food) => {
     if (food.imageMetadata && food.imageMetadata.aspectRatio) {
-      const cardWidth = 100; // Fixed width for food card images
+      const cardWidth = 100; // Lebar tetap untuk gambar card
       const height = cardWidth / food.imageMetadata.aspectRatio;
       return {
         width: cardWidth,
         height: Math.max(80, Math.min(height, 120)), // Min 80, max 120
       };
     }
-    return styles.foodImage; // Default style
+    return styles.foodImage; // Style default
   };
 
   return (
     <ScrollView style={styles.container}>
       <Text style={styles.header}>Kelola Menu Makanan</Text>
       
-      {/* Canteen Selection */}
+      {/* Section Pemilihan Kantin */}
       <View style={styles.canteenContainer}>
         <Text style={styles.canteenLabel}>Pilih Kantin:</Text>
         <View style={styles.canteenPicker}>
@@ -293,7 +319,7 @@ const ManageFood = () => {
             onValueChange={(itemValue) => {
               setSelectedCanteen(itemValue);
               if (isEditing) {
-                resetForm(); // Reset form when switching canteen during edit
+                resetForm(); // Reset form saat ganti kantin pada mode edit
               }
             }}
             style={styles.picker}
@@ -309,17 +335,21 @@ const ManageFood = () => {
         </View>
       </View>
       
+      {/* Form Tambah/Edit Makanan */}
       <View style={styles.formContainer}>
         <Text style={styles.formTitle}>
           {isEditing ? `Edit Menu - Kantin ${selectedCanteen}` : `Tambah Menu Baru - Kantin ${selectedCanteen}`}
         </Text>
         
+        {/* Input Nama Makanan */}
         <TextInput
           style={styles.input}
           placeholder="Nama Makanan"
           value={name}
           onChangeText={setName}
         />
+        
+        {/* Input Harga */}
         <TextInput
           style={styles.input}
           placeholder="Harga"
@@ -327,6 +357,8 @@ const ManageFood = () => {
           value={price}
           onChangeText={setPrice}
         />
+        
+        {/* Input Deskripsi */}
         <TextInput
           style={[styles.input, styles.textArea]}
           placeholder="Deskripsi"
@@ -335,6 +367,7 @@ const ManageFood = () => {
           onChangeText={setDescription}
         />
         
+        {/* Image Picker */}
         <TouchableOpacity style={styles.imagePicker} onPress={pickImage} disabled={isLoading}>
           {isLoading ? (
             <View style={styles.loadingContainer}>
@@ -345,7 +378,7 @@ const ManageFood = () => {
             <Image 
               source={{ uri: getImageUri(image) }} 
               style={styles.previewImage}
-              resizeMode="contain" // Changed to contain to preserve aspect ratio
+              resizeMode="contain"
             />
           ) : (
             <View style={styles.imagePickerContent}>
@@ -356,6 +389,7 @@ const ManageFood = () => {
           )}
         </TouchableOpacity>
         
+        {/* Tombol Simpan */}
         <TouchableOpacity
           style={[styles.saveButton, isLoading && styles.disabledButton]}
           onPress={handleSave}
@@ -366,6 +400,7 @@ const ManageFood = () => {
           </Text>
         </TouchableOpacity>
         
+        {/* Tombol Batal Edit (hanya muncul saat edit) */}
         {isEditing && (
           <TouchableOpacity
             style={styles.cancelButton}
@@ -376,6 +411,7 @@ const ManageFood = () => {
         )}
       </View>
       
+      {/* Daftar Menu Makanan */}
       <Text style={styles.subHeader}>Menu Kantin {selectedCanteen}</Text>
       {isLoading && foods.length === 0 ? (
         <View style={styles.loadingContainer}>
@@ -386,11 +422,14 @@ const ManageFood = () => {
         <View style={styles.foodList}>
           {foods.map((food) => (
             <View key={food.id} style={styles.foodCard}>
+              {/* Gambar Makanan */}
               <Image 
                 source={{ uri: food.imageData }} 
                 style={getFoodImageStyle(food)}
                 resizeMode="cover"
               />
+              
+              {/* Info Makanan */}
               <View style={styles.foodInfo}>
                 <Text style={styles.foodName}>{food.name}</Text>
                 <Text style={styles.foodPrice}>Rp {food.price.toLocaleString()}</Text>
@@ -398,7 +437,10 @@ const ManageFood = () => {
                 <Text style={styles.foodDescription} numberOfLines={2}>
                   {food.description}
                 </Text>
+                
+                {/* Tombol Aksi */}
                 <View style={styles.actionButtons}>
+                  {/* Tombol Edit */}
                   <TouchableOpacity
                     style={styles.editButton}
                     onPress={() => handleEdit(food)}
@@ -407,6 +449,7 @@ const ManageFood = () => {
                     <Ionicons name="create-outline" size={20} color="#fff" />
                   </TouchableOpacity>
                   
+                  {/* Tombol Hapus */}
                   <TouchableOpacity
                     style={[styles.deleteButton, isLoading && styles.disabledButton]}
                     onPress={() => handleDeletePress(food.id)}
@@ -420,6 +463,7 @@ const ManageFood = () => {
             </View>
           ))}
           
+          {/* Pesan jika belum ada menu */}
           {foods.length === 0 && (
             <View style={styles.emptyContainer}>
               <Text style={styles.emptyText}>Belum ada menu makanan di Kantin {selectedCanteen}</Text>
@@ -431,6 +475,7 @@ const ManageFood = () => {
   );
 };
 
+// Styles untuk komponen
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -443,6 +488,7 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     textAlign: 'center',
   },
+  // Style untuk container pemilihan kantin
   canteenContainer: {
     backgroundColor: '#fff',
     padding: 15,
@@ -468,6 +514,7 @@ const styles = StyleSheet.create({
   picker: {
     height: 50,
   },
+  // Style untuk form container
   formContainer: {
     backgroundColor: '#fff',
     padding: 15,
@@ -486,6 +533,7 @@ const styles = StyleSheet.create({
     color: '#4285F4',
     textAlign: 'center',
   },
+  // Style untuk input fields
   input: {
     backgroundColor: '#f2f2f2',
     padding: 15,
@@ -496,11 +544,12 @@ const styles = StyleSheet.create({
     height: 100,
     textAlignVertical: 'top',
   },
+  // Style untuk image picker
   imagePicker: {
     backgroundColor: '#f2f2f2',
     borderRadius: 10,
     marginBottom: 15,
-    height: 200, // Increased height for better preview
+    height: 200,
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
@@ -523,6 +572,7 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
+  // Style untuk loading indicator
   loadingContainer: {
     justifyContent: 'center',
     alignItems: 'center',
@@ -532,6 +582,7 @@ const styles = StyleSheet.create({
     marginTop: 10,
     color: '#666',
   },
+  // Style untuk tombol
   saveButton: {
     backgroundColor: '#4285F4',
     padding: 15,
@@ -558,6 +609,7 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     fontSize: 16,
   },
+  // Style untuk daftar makanan
   subHeader: {
     fontSize: 18,
     fontWeight: 'bold',
@@ -577,7 +629,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 5,
     elevation: 3,
-    alignItems: 'stretch', // Allow flexible height
+    alignItems: 'stretch',
   },
   foodImage: {
     width: 100,
@@ -612,6 +664,7 @@ const styles = StyleSheet.create({
     color: '#666',
     flex: 1,
   },
+  // Style untuk tombol aksi
   actionButtons: {
     flexDirection: 'row',
     marginTop: 8,
@@ -636,6 +689,7 @@ const styles = StyleSheet.create({
     marginLeft: 5,
     fontWeight: 'bold',
   },
+  // Style untuk pesan kosong
   emptyContainer: {
     padding: 50,
     alignItems: 'center',

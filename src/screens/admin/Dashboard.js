@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+
+ import React, { useState, useEffect, useRef } from 'react';
 import { 
   View, 
   Text, 
@@ -26,6 +27,11 @@ import {
 const AdminDashboard = () => {
   const navigation = useNavigation();
   const [loading, setLoading] = useState(true);
+  const [dataLoaded, setDataLoaded] = useState({
+    orders: false,
+    menu: false,
+    users: false
+  });
   const [stats, setStats] = useState({
     menuCount: 0,
     todayOrdersCount: 0,
@@ -69,13 +75,21 @@ const AdminDashboard = () => {
     }
   };
 
+  // Check if all data is loaded
+  const checkDataLoaded = (newDataLoaded) => {
+    if (newDataLoaded.orders && newDataLoaded.menu && newDataLoaded.users) {
+      console.log('✅ All data loaded, hiding loading screen');
+      setLoading(false);
+    }
+  };
+
   // Animate numbers counting up
   const animateNumbers = (newStats) => {
     Object.keys(numberCounters).forEach(key => {
       if (newStats[key] !== undefined) {
         Animated.timing(numberCounters[key], {
           toValue: newStats[key],
-          duration: 1500,
+          duration: 1000, // Reduced duration for faster response
           easing: Easing.out(Easing.quad),
           useNativeDriver: false,
         }).start();
@@ -89,36 +103,35 @@ const AdminDashboard = () => {
       return Animated.parallel([
         Animated.timing(cardAnim.scale, {
           toValue: 1,
-          duration: 600,
-          delay: index * 100,
-          easing: Easing.elastic(1.2),
+          duration: 400, // Faster animation
+          delay: index * 50, // Reduced delay
+          easing: Easing.elastic(1.1),
           useNativeDriver: true,
         }),
         Animated.timing(cardAnim.opacity, {
           toValue: 1,
-          duration: 400,
-          delay: index * 100,
+          duration: 300,
+          delay: index * 50,
           useNativeDriver: true,
         }),
         Animated.timing(cardAnim.translateY, {
           toValue: 0,
-          duration: 500,
-          delay: index * 100,
-          easing: Easing.out(Easing.back(1.2)),
+          duration: 350,
+          delay: index * 50,
+          easing: Easing.out(Easing.back(1.1)),
           useNativeDriver: true,
         })
       ]);
     });
 
-    Animated.stagger(80, animations).start();
+    Animated.stagger(40, animations).start();
   };
 
   // Animate order cards
   const animateOrderCards = (orderCount) => {
-    initializeCardAnimations(orderCount + 6); // +6 for stat cards
+    initializeCardAnimations(orderCount + 6);
     
     const orderAnimations = cardAnimations.slice(6, 6 + orderCount).map((cardAnim, index) => {
-      // Reset values
       cardAnim.scale.setValue(0);
       cardAnim.opacity.setValue(0);
       cardAnim.translateY.setValue(20);
@@ -126,28 +139,28 @@ const AdminDashboard = () => {
       return Animated.parallel([
         Animated.timing(cardAnim.scale, {
           toValue: 1,
-          duration: 400,
-          delay: index * 80,
-          easing: Easing.out(Easing.back(1.1)),
+          duration: 300,
+          delay: index * 60,
+          easing: Easing.out(Easing.back(1.05)),
           useNativeDriver: true,
         }),
         Animated.timing(cardAnim.opacity, {
           toValue: 1,
-          duration: 300,
-          delay: index * 80,
+          duration: 250,
+          delay: index * 60,
           useNativeDriver: true,
         }),
         Animated.timing(cardAnim.translateY, {
           toValue: 0,
-          duration: 400,
-          delay: index * 80,
+          duration: 300,
+          delay: index * 60,
           easing: Easing.out(Easing.quad),
           useNativeDriver: true,
         })
       ]);
     });
 
-    Animated.stagger(40, orderAnimations).start();
+    Animated.stagger(30, orderAnimations).start();
   };
 
   // Pulse animation for loading
@@ -156,13 +169,13 @@ const AdminDashboard = () => {
       Animated.sequence([
         Animated.timing(pulseAnim, {
           toValue: 1.1,
-          duration: 1000,
+          duration: 800,
           easing: Easing.inOut(Easing.quad),
           useNativeDriver: true,
         }),
         Animated.timing(pulseAnim, {
           toValue: 1,
-          duration: 1000,
+          duration: 800,
           easing: Easing.inOut(Easing.quad),
           useNativeDriver: true,
         }),
@@ -175,7 +188,7 @@ const AdminDashboard = () => {
     Animated.loop(
       Animated.timing(rotateAnim, {
         toValue: 1,
-        duration: 2000,
+        duration: 1500,
         easing: Easing.linear,
         useNativeDriver: true,
       })
@@ -187,20 +200,20 @@ const AdminDashboard = () => {
     Animated.parallel([
       Animated.timing(fadeAnim, {
         toValue: 1,
-        duration: 800,
+        duration: 600,
         easing: Easing.out(Easing.quad),
         useNativeDriver: true,
       }),
       Animated.timing(slideAnim, {
         toValue: 0,
-        duration: 600,
-        easing: Easing.out(Easing.back(1.2)),
+        duration: 500,
+        easing: Easing.out(Easing.back(1.1)),
         useNativeDriver: true,
       }),
       Animated.timing(scaleAnim, {
         toValue: 1,
-        duration: 700,
-        easing: Easing.out(Easing.back(1.1)),
+        duration: 550,
+        easing: Easing.out(Easing.back(1.05)),
         useNativeDriver: true,
       })
     ]).start(() => {
@@ -255,13 +268,21 @@ const AdminDashboard = () => {
           return newStats;
         });
         
-        // Animate order cards
+        // Mark orders as loaded
+        setDataLoaded(prev => {
+          const newDataLoaded = { ...prev, orders: true };
+          checkDataLoaded(newDataLoaded);
+          return newDataLoaded;
+        });
+        
+        // Animate order cards after a short delay
         setTimeout(() => {
           animateOrderCards(Math.min(allOrders.length, 5));
-        }, 500);
+        }, 200);
       }, (error) => {
         console.error("❌ Error in orders listener:", error);
         Alert.alert('Error', 'Gagal memuat data pesanan real-time');
+        setDataLoaded(prev => ({ ...prev, orders: true })); // Mark as loaded even on error
       });
       
       unsubscribeRefs.current.push(unsubscribeOrders);
@@ -282,9 +303,17 @@ const AdminDashboard = () => {
           setLastUpdateTime(new Date());
           return newStats;
         });
+
+        // Mark menu as loaded
+        setDataLoaded(prev => {
+          const newDataLoaded = { ...prev, menu: true };
+          checkDataLoaded(newDataLoaded);
+          return newDataLoaded;
+        });
       }, (error) => {
         console.error("❌ Error in foods listener:", error);
         Alert.alert('Error', 'Gagal memuat data menu real-time');
+        setDataLoaded(prev => ({ ...prev, menu: true })); // Mark as loaded even on error
       });
       
       unsubscribeRefs.current.push(unsubscribeFoods);
@@ -305,15 +334,30 @@ const AdminDashboard = () => {
           setLastUpdateTime(new Date());
           return newStats;
         });
+
+        // Mark users as loaded
+        setDataLoaded(prev => {
+          const newDataLoaded = { ...prev, users: true };
+          checkDataLoaded(newDataLoaded);
+          return newDataLoaded;
+        });
       }, (error) => {
         console.error("❌ Error in users listener:", error);
         Alert.alert('Error', 'Gagal memuat data user real-time');
+        setDataLoaded(prev => ({ ...prev, users: true })); // Mark as loaded even on error
       });
       
       unsubscribeRefs.current.push(unsubscribeUsers);
 
       console.log('✅ All real-time listeners setup successfully');
-      setLoading(false);
+
+      // Fallback timeout to ensure loading stops even if data is slow
+      setTimeout(() => {
+        if (loading) {
+          console.log('⏰ Timeout reached, stopping loading');
+          setLoading(false);
+        }
+      }, 10000); // 10 second timeout
 
     } catch (error) {
       console.error("❌ Error setting up real-time listeners:", error);
@@ -323,16 +367,16 @@ const AdminDashboard = () => {
   };
 
   useEffect(() => {
+    console.log('🚀 AdminDashboard mounted, initializing...');
+    
     // Initialize card animations
-    initializeCardAnimations(12); // 6 stat cards + 6 order cards
+    initializeCardAnimations(12);
     
     // Start loading animations
-    if (loading) {
-      startPulseAnimation();
-      startRotateAnimation();
-    }
+    startPulseAnimation();
+    startRotateAnimation();
 
-    // Setup all real-time listeners
+    // Setup all real-time listeners immediately
     setupRealTimeListeners();
     
     // Cleanup function
@@ -348,9 +392,16 @@ const AdminDashboard = () => {
 
   useEffect(() => {
     if (!loading) {
+      console.log('✨ Starting entrance animation');
       startEntranceAnimation();
     }
   }, [loading]);
+
+  // Debug effect to track loading state
+  useEffect(() => {
+    console.log('📊 Data loaded state:', dataLoaded);
+    console.log('⏳ Loading state:', loading);
+  }, [dataLoaded, loading]);
 
   // Navigation handlers
   const handleNavigateToOrders = () => {
@@ -379,7 +430,7 @@ const AdminDashboard = () => {
   };
 
   const renderOrderItem = ({ item, index }) => {
-    const cardIndex = index + 6; // Offset by 6 for stat cards
+    const cardIndex = index + 6;
     const cardAnimation = cardAnimations[cardIndex] || { 
       scale: new Animated.Value(1), 
       opacity: new Animated.Value(1), 
@@ -458,6 +509,11 @@ const AdminDashboard = () => {
         >
           Memuat dashboard real-time...
         </Animated.Text>
+        <Text style={styles.loadingSubText}>
+          {dataLoaded.orders ? '✅' : '⏳'} Pesanan {' '}
+          {dataLoaded.menu ? '✅' : '⏳'} Menu {' '}
+          {dataLoaded.users ? '✅' : '⏳'} Pengguna
+        </Text>
       </View>
     );
   }
@@ -650,10 +706,10 @@ const AdminDashboard = () => {
         
         {recentOrders.length > 0 ? (
           <FlatList
-            data={recentOrders.slice(0, 5)} // Show only 5 most recent orders
+            data={recentOrders.slice(0, 5)}
             renderItem={renderOrderItem}
             keyExtractor={item => item.id}
-            scrollEnabled={false} // Disable scrolling as we're inside ScrollView
+            scrollEnabled={false}
           />
         ) : (
           <Animated.View
@@ -695,6 +751,13 @@ const styles = StyleSheet.create({
     marginTop: 15,
     color: '#666',
     fontSize: 16,
+    textAlign: 'center',
+  },
+  loadingSubText: {
+    marginTop: 10,
+    color: '#888',
+    fontSize: 14,
+    textAlign: 'center',
   },
   header: {
     fontSize: 24,
